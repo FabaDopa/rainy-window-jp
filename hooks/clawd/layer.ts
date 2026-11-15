@@ -2,7 +2,7 @@
 // 姿（モデル）× 状態 × effort の台本を絵にして、小物・画面の光・演出・サブエージェントの子を重ねる。純粋な関数だけ。
 // 重ね方は承認された見本（tmp-pick/gen の clawd-gen6.ts の scene、clawd-lib.ts の corner、clawd-gen2.ts の m-E）と同じ。
 // 部屋の SVG の中に入れるとき（1枚の Svg）は layerBody、単独の SVG（テスト・写真）は layerSvg で包む。
-// カードの見た目のタブの小さな絵（tiles.ts）は、clawdInnerOf で組み立てた中身を止めて切り出す。
+// カードのクロードくんのタブの止まった絵（tiles.ts）は、clawdInnerOf で組み立てた中身を止めて切り出す。
 
 import type { RoomColors } from '../lib/palette'
 import { clawdFineMasks, clawdMasks, cornerInner, styleOf } from '../scene'
@@ -245,7 +245,7 @@ export function clawdLayerSvg(v: ClawdView, room?: RoomColors): string {
 }
 
 /**
- * 台本を渡して組み立てた層の中身（カードの見た目のタブの小さな絵 tiles.ts が、止めて切り出す）。
+ * 台本を渡して組み立てた層の中身（カードのクロードくんのタブの止まった絵 tiles.ts が、止めて切り出す）。
  * 重ね方・小物・光・演出・子は clawdLayerInner と同じ。scripts は本体の台本（Haiku は3人ぶん）。
  * 演出は全部の版（大きさで軽くしない：止めた絵は、最初のコマのほかを落とすので小さい）。
  */

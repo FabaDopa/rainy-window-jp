@@ -233,16 +233,16 @@ test('タイルの style：使う class だけ。色は部屋の styleOf と同�
   }
 })
 
-test('clawdTiles：姿は 自動（いまのモデルの姿）と4つ、演出は 自動（いまの effort、分からなければなし）となし〜max。全部で 80,000 文字以下', () => {
+test('clawdTiles（写真の道具 clawd-shots が使う）：姿は 自動（いまのモデルの姿）と4つ、演出は 自動（いまの effort、分からなければ low）と low〜max。全部で 80,000 文字以下', () => {
   let worst = 0
-  const levels = { none: 0, medium: 1, high: 2, xhigh: 3, max: 4 } as const
+  const levels = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4 } as const
   for (const autoLook of LOOKS)
     for (const look of LOOKS)
       for (const dots of DOTS)
         for (const autoLevel of [0, 4] as const) {
           const t = T.clawdTiles({ autoLook, look, autoLevel, dots, room: ROOM })
           assert.deepEqual(Object.keys(t.looks), ['auto', 'sonnet', 'haiku', 'opus', 'fable'])
-          assert.deepEqual(Object.keys(t.effects), ['auto', 'none', 'medium', 'high', 'xhigh', 'max'])
+          assert.deepEqual(Object.keys(t.effects), ['auto', 'low', 'medium', 'high', 'xhigh', 'max'])
           assert.equal(t.looks.auto, T.lookTileSvg(autoLook, dots, ROOM))
           for (const l of LOOKS) assert.equal(t.looks[l], T.lookTileSvg(l, dots, ROOM))
           assert.equal(t.effects.auto, T.effectTileSvg(look, autoLevel, dots, ROOM))

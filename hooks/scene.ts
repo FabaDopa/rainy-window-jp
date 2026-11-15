@@ -49,7 +49,7 @@ const SHELF_AT = '62%'
 const NEAR = 192
 const FAR = 144
 
-const LIGHT: Record<string, string> = {
+export const LIGHT: Record<string, string> = {
   top: '#F2ECE2', mid: '#EFE7DB', bottom: '#EEDFCA', cool: '#BCC8EE', rose: '#EFC9D6', warm: '#F7C48A', floor: '#F3D3B1',
   tex: '#DDD1BE', shade: '#D8C6AA',
   winTop: '#A9BEEC', winBot: '#E1E9F8', sky: '#5664D6', hill: '#7286D0', hill2: '#5464BE', tree: '#3E4B9E', sun: '#F2A35E', moon: '#F3ECD8', star: '#E9E1CE',
@@ -61,7 +61,7 @@ const LIGHT: Record<string, string> = {
   wire: '#7A7488', puff: '#8E8AA6', mug: '#FFFDF8', rad: '#8E97C2', sleeveA: '#E8A3A6', sleeveB: '#7D92D8', wax: '#EFC7A8', flame: '#F29A4A', guitar: '#D7894E',
   ao: '#C9B596',
 }
-const DARK: Record<string, string> = {
+export const DARK: Record<string, string> = {
   top: '#13152E', mid: '#181A35', bottom: '#221A35', cool: '#3B4AB8', rose: '#7A3F8C', warm: '#F2A25C', floor: '#C9704A',
   tex: '#20234A', shade: '#33284F',
   winTop: '#0B1030', winBot: '#28326E', sky: '#4552B8', hill: '#222A62', hill2: '#181E4C', tree: '#10153A', sun: '#F3ECD8', moon: '#F3ECD8', star: '#E9E1CE',
@@ -679,7 +679,7 @@ function buildScene(now: Date, room: RoomColors | undefined, opts: SceneOpts): s
   o += desk()
   o += at('0', '100%', `<g transform="translate(0 ${-DESK + 18})">${deskLeft()}</g>`)
   o += at('100%', '100%', `<g transform="translate(0 ${-DESK + 18})">${pencilCup()}</g>`)
-  // クロードくん抜きのときは、部屋だけ（クロードくんは別の層に描く）。
+  // clawd: false のときは、部屋だけ（クロードくんを別の Svg に描いていたころのなごり。今は mod からは使わず、テストだけが使う）。
   // layer があれば、corner の代わりに同じ場所へ層（clawd/layer.ts の layerBody）を置く。
   if (layer !== undefined) o += `<svg x="100%" y="100%" width="1" height="1" overflow="visible"><g transform="translate(-520 -360)">${layer}</g></svg>`
   else if (withClawd) o += corner()

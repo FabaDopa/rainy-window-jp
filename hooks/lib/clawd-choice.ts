@@ -6,12 +6,12 @@ import type { ClawdView } from '../clawd/layer'
 import type { Level, Look, Phase } from '../clawd/scripts'
 
 export type ClawdLook = 'auto' | Look
-export type ClawdEffect = 'auto' | 'none' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ClawdEffect = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type Dots = 'normal' | 'fine'
 export type ClawdChoice = { look: ClawdLook; effect: ClawdEffect; dots: Dots }
 
 export const CLAWD_LOOKS: readonly ClawdLook[] = ['auto', 'sonnet', 'haiku', 'opus', 'fable']
-export const CLAWD_EFFECTS: readonly ClawdEffect[] = ['auto', 'none', 'medium', 'high', 'xhigh', 'max']
+export const CLAWD_EFFECTS: readonly ClawdEffect[] = ['auto', 'low', 'medium', 'high', 'xhigh', 'max']
 export const DOTS: readonly Dots[] = ['normal', 'fine']
 
 /** 何も保存していないとき：姿も演出も自動、ドットはふつう。 */
@@ -30,7 +30,8 @@ export function normalizeClawd(raw: unknown): ClawdChoice {
   if (!isRecord(raw)) return { ...DEFAULT_CLAWD }
   return {
     look: pick(CLAWD_LOOKS, raw.look, DEFAULT_CLAWD.look),
-    effect: pick(CLAWD_EFFECTS, raw.effect, DEFAULT_CLAWD.effect),
+    // 前の版の「なし」（none）は low として読む（演出なし・打つ速さはふつうで、見た目は同じ）
+    effect: pick(CLAWD_EFFECTS, raw.effect === 'none' ? 'low' : raw.effect, DEFAULT_CLAWD.effect),
     dots: pick(DOTS, raw.dots, DEFAULT_CLAWD.dots),
   }
 }
@@ -72,7 +73,8 @@ export function viewOf(i: ViewInput): ClawdView {
   const look: Look = choice.look === 'auto' ? lookOfModel(i.model) : choice.look
   let effect: Level
   let tempo: Level
-  if (choice.effect === 'none') {
+  if (choice.effect === 'low') {
+    // low は演出なし。打つ速さはふつう（low は速さを表すものではない）
     effect = 0
     tempo = 1
   } else if (choice.effect === 'auto') {
@@ -96,7 +98,7 @@ export function viewOf(i: ViewInput): ClawdView {
 }
 
 const labelOfLook = (v: ClawdLook) => (v === 'auto' ? '自動' : v)
-const labelOfEffect = (v: ClawdEffect) => (v === 'auto' ? '自動' : v === 'none' ? 'なし' : v)
+const labelOfEffect = (v: ClawdEffect) => (v === 'auto' ? '自動' : v)
 const labelOfDots = (v: Dots) => (v === 'fine' ? '細かい' : 'ふつう')
 
 /** 「姿 自動・演出 max・ドット ふつう」のような説明。 */

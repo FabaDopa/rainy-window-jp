@@ -1,4 +1,4 @@
-// /rj のカードの「🐾 クロードくんの見た目」のタブに並べる、小さな止まった絵（タイル）。純粋な関数だけ。
+// /rj のカードの「クロードくん」のタブの大きな絵と、写真の道具（tools/clawd-shots.ts）に並べる、止まった絵（タイル）。純粋な関数だけ。
 // 絵は、部屋のクロードくんの層と同じ組み立て（layer.ts の clawdInnerOf）を、文書の時刻 0 の姿で止めて（freezeSvg）、
 // クロードくんのまわりだけを切り出したもの。SMIL は1つも残さない。
 // なぜ止めるか：入力欄の上の帯は、スクロールのたびに Svg を出し直す。動く絵は出し直すたびに最初から動き直す
@@ -590,11 +590,11 @@ export function effectTileSvg(look: Look, level: Level, dots: Dots, room?: RoomC
   })
 }
 
-/** 見た目のタブの全部のタイル：姿の行（自動と4つ）と、演出の行（自動となし〜max）。 */
+/** 写真の道具（clawd-shots）用の全部のタイル：姿の行（自動と4つ）と、演出の行（自動となし〜max）。 */
 export type ClawdTiles = { looks: Record<ClawdLook, string>; effects: Record<ClawdEffect, string> }
 
 /**
- * 見た目のタブのタイル。autoLook は今のモデルの姿（姿の「自動」）、look はカードで選んでいる姿（自動なら autoLook）、
+ * 写真の道具（clawd-shots）用のタイル。autoLook は今のモデルの姿（姿の「自動」）、look はカードで選んでいる姿（自動なら autoLook）、
  * autoLevel は今の effort の段階（演出の「自動」。分からなければ 0＝なし）。dots・room はカードで選んでいるドットと部屋の色。
  */
 export function clawdTiles(o: { autoLook: Look; look: Look; autoLevel: Level; dots: Dots; room?: RoomColors }): ClawdTiles {
@@ -602,6 +602,6 @@ export function clawdTiles(o: { autoLook: Look; look: Look; autoLevel: Level; do
   const effectTile = (level: Level) => effectTileSvg(o.look, level, o.dots, o.room)
   return {
     looks: { auto: lookTile(o.autoLook), sonnet: lookTile('sonnet'), haiku: lookTile('haiku'), opus: lookTile('opus'), fable: lookTile('fable') },
-    effects: { auto: effectTile(o.autoLevel), none: effectTile(0), medium: effectTile(1), high: effectTile(2), xhigh: effectTile(3), max: effectTile(4) },
+    effects: { auto: effectTile(o.autoLevel), low: effectTile(0), medium: effectTile(1), high: effectTile(2), xhigh: effectTile(3), max: effectTile(4) },
   }
 }

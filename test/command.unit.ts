@@ -74,8 +74,10 @@ test('/rj 試す・probe は、確かめを外したので分からない語（�
 test('クロードくんの語：演出・姿・ドット（背景色なしでも通る）', () => {
   assert.deepEqual(parseRj('演出 max'), { kind: 'apply', scope: 'global', clawd: { effect: 'max' } })
   assert.deepEqual(parseRj('effect high'), { kind: 'apply', scope: 'global', clawd: { effect: 'high' } })
-  assert.deepEqual(parseRj('演出 なし'), { kind: 'apply', scope: 'global', clawd: { effect: 'none' } })
-  assert.deepEqual(parseRj('effect none'), { kind: 'apply', scope: 'global', clawd: { effect: 'none' } })
+  assert.deepEqual(parseRj('演出 low'), { kind: 'apply', scope: 'global', clawd: { effect: 'low' } })
+  // 前の版の書き方（なし・none）も、low として通る
+  assert.deepEqual(parseRj('演出 なし'), { kind: 'apply', scope: 'global', clawd: { effect: 'low' } })
+  assert.deepEqual(parseRj('effect none'), { kind: 'apply', scope: 'global', clawd: { effect: 'low' } })
   assert.deepEqual(parseRj('演出 自動'), { kind: 'apply', scope: 'global', clawd: { effect: 'auto' } })
   assert.deepEqual(parseRj('演出 medium'), { kind: 'apply', scope: 'global', clawd: { effect: 'medium' } })
   assert.deepEqual(parseRj('演出 xhigh'), { kind: 'apply', scope: 'global', clawd: { effect: 'xhigh' } })
@@ -94,11 +96,11 @@ test('背景の語とクロードくんの語は、順番自由で混ぜられ�
 
 test('なし だけは今までどおり背景のオフ、演出のあとの なし は演出なし', () => {
   assert.deepEqual(parseRj('なし'), { kind: 'apply', scope: 'global', theme: 'なし' })
-  assert.deepEqual(parseRj('なし 演出 なし'), { kind: 'apply', scope: 'global', theme: 'なし', clawd: { effect: 'none' } })
+  assert.deepEqual(parseRj('なし 演出 なし'), { kind: 'apply', scope: 'global', theme: 'なし', clawd: { effect: 'low' } })
 })
 
 test('クロードくんの語の間違いは使い方を返す', () => {
-  for (const bad of ['演出', '姿', 'ドット', '演出 low', '姿 gpt', 'ドット 大きい', '演出 max high', '姿 opus haiku', 'dots fine normal', '演出 緑', '演出 max reset', 'reset 演出 max', '試す 演出 max', '演出 p', '姿 s']) {
+  for (const bad of ['演出', '姿', 'ドット', '演出 低い', '姿 gpt', 'ドット 大きい', '演出 max high', '姿 opus haiku', 'dots fine normal', '演出 緑', '演出 max reset', 'reset 演出 max', '試す 演出 max', '演出 p', '姿 s']) {
     assert.equal(parseRj(bad).kind, 'help', bad)
   }
 })

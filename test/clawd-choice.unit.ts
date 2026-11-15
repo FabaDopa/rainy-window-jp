@@ -11,9 +11,11 @@ test('標準は 姿 自動・演出 自動・ドット ふつう', () => {
 test('normalizeClawd：項目ごとに、正しくなければ標準。例外を投げない', () => {
   assert.deepEqual(normalizeClawd(undefined), DEFAULT_CLAWD)
   assert.deepEqual(normalizeClawd({ look: 'x', effect: 'max' }), { look: 'auto', effect: 'max', dots: 'normal' })
-  assert.deepEqual(normalizeClawd({ look: 'opus', effect: 'none', dots: 'fine', extra: 1 }), { look: 'opus', effect: 'none', dots: 'fine' })
+  assert.deepEqual(normalizeClawd({ look: 'opus', effect: 'low', dots: 'fine', extra: 1 }), { look: 'opus', effect: 'low', dots: 'fine' })
+  // 前の版の「なし」（none）は、low として読む（演出なし・打つ速さはふつうで、同じ見た目）
+  assert.deepEqual(normalizeClawd({ look: 'opus', effect: 'none', dots: 'fine' }), { look: 'opus', effect: 'low', dots: 'fine' })
   for (const bad of [null, 'x', 42, [], { look: 3, effect: {}, dots: null }]) assert.deepEqual(normalizeClawd(bad), DEFAULT_CLAWD, JSON.stringify(bad))
-  assert.deepEqual(normalizeClawd({ look: 'toString', effect: 'low', dots: 'constructor' }), DEFAULT_CLAWD)
+  assert.deepEqual(normalizeClawd({ look: 'toString', effect: 'toString', dots: 'constructor' }), DEFAULT_CLAWD)
 })
 
 test('lookOfModel：モデル名に haiku sonnet opus fable を含むか（大文字小文字を区別しない）', () => {
@@ -52,8 +54,9 @@ test('viewOf：演出と速さ', () => {
   assert.deepEqual(pick(v(c({}), 'high')), [2, 2])
   assert.deepEqual(pick(v(c({}), 'low')), [0, 0])
   assert.deepEqual(pick(v(c({}), 'max')), [4, 4])
-  assert.deepEqual(pick(v(c({ effect: 'none' }), 'max')), [0, 1])
-  assert.deepEqual(pick(v(c({ effect: 'none' }))), [0, 1])
+  // low は演出なし。打つ速さは今までの「なし」と同じ、ふつう（low は速さを表すものではない）
+  assert.deepEqual(pick(v(c({ effect: 'low' }), 'max')), [0, 1])
+  assert.deepEqual(pick(v(c({ effect: 'low' }))), [0, 1])
   assert.deepEqual(pick(v(c({ effect: 'max' }))), [4, 4])
   assert.deepEqual(pick(v(c({ effect: 'medium' }), 'max')), [1, 1])
   assert.deepEqual(pick(v(c({ effect: 'high' }))), [2, 2])
@@ -80,6 +83,6 @@ test('viewOf：ドット・子の数・来た子と帰った子を引き継ぐ�
 
 test('describeClawd', () => {
   assert.equal(describeClawd(c({ effect: 'max' })), '姿 自動・演出 max・ドット ふつう')
-  assert.equal(describeClawd({ look: 'opus', effect: 'none', dots: 'fine' }), '姿 opus・演出 なし・ドット 細かい')
+  assert.equal(describeClawd({ look: 'opus', effect: 'low', dots: 'fine' }), '姿 opus・演出 low・ドット 細かい')
   assert.equal(describeClawd(DEFAULT_CLAWD), '姿 自動・演出 自動・ドット ふつう')
 })

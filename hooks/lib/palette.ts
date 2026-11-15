@@ -176,7 +176,7 @@ export function buildTheme(choice: Choice, band: Band): { theme: Built['theme'];
 // 部屋の絵（scene.ts）の色は、アプリの文字色から昼用・夜用を選ぶ固定の色。そこで壁・床・光の色を
 // 背景色ごとに作って渡す。壁だけ染めても、上に重なる窓の光（cool）・照明の赤み（rose）・机の光（floor）に
 // 隠れて見えないので、それらも同じ色合いにそろえる。明るい画面でも分かるよう、彩度は高めにする。
-// 紺の夜は元の絵のまま（undefined を返す）。
+// 紺の夜は、暗い画面だけ元の絵の色そのまま（明るい画面は淡い紺）。オフ（なし）は undefined を返し、元の絵のままになる。
 
 /** 渡す色の名前（scene.ts の LIGHT / DARK の名前）。 */
 export const ROOM_KEYS = ['top', 'mid', 'bottom', 'tex', 'shade', 'mat', 'cool', 'rose', 'floor'] as const

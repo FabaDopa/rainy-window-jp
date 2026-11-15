@@ -33,7 +33,6 @@ export const P0: Pose = {
 export type Frame = [Pose, number]
 export const SCREEN: [number, number] = [-1, 1]
 export const YOU: [number, number] = [-1, 0]
-export const WINDOW: [number, number] = [1, -1]
 export const UP: [number, number] = [0, -1]
 
 

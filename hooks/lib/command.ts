@@ -1,7 +1,7 @@
 // /rj の引数の読み取り。AI は使わない。語の順番は自由。
 //   /rj                         → カード
 //   /rj <背景色> [時間帯] [明るさ] [p|s]
-//   /rj 姿 <自動|sonnet|haiku|opus|fable> / 演出 <自動|なし|medium|high|xhigh|max> / ドット <ふつう|細かい>（背景の語と混ぜてよい）
+//   /rj 姿 <自動|sonnet|haiku|opus|fable> / 演出 <自動|low|medium|high|xhigh|max> / ドット <ふつう|細かい>（背景の語と混ぜてよい）
 //   /rj reset [p|s]             → その保存先の設定を消す（書かなければ すべての会話）
 
 import type { ClawdChoice, ClawdEffect, ClawdLook, Dots } from './clawd-choice'
@@ -49,7 +49,9 @@ const EFFECT_KEY = new Set(['演出', 'effect'])
 const DOTS_KEY = new Set(['ドット', 'dots'])
 const LOOKS: Record<string, ClawdLook> = { 自動: 'auto', auto: 'auto', sonnet: 'sonnet', haiku: 'haiku', opus: 'opus', fable: 'fable' }
 const EFFECTS: Record<string, ClawdEffect> = {
-  自動: 'auto', auto: 'auto', なし: 'none', none: 'none', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+  自動: 'auto', auto: 'auto', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+  // 前の版の書き方
+  なし: 'low', none: 'low',
 }
 const DOT_SIZES: Record<string, Dots> = { ふつう: 'normal', normal: 'normal', 細かい: 'fine', fine: 'fine' }
 
@@ -60,7 +62,7 @@ export const RJ_USAGE = [
   '  時間帯：自動、または 朝 昼 夕方 夜（固定 夕方 とも書ける。auto morning day evening night）',
   '  明るさ：システム 黒 白（system dark light）',
   '  姿：自動、または sonnet haiku opus fable（クロードくんの姿。look）',
-  '  演出：自動、または なし medium high xhigh max（effect）',
+  '  演出：自動、または low medium high xhigh max（effect。low は演出なし）',
   '  ドット：ふつう 細かい（dots）',
   '  保存先：書かない＝すべての会話、p＝このフォルダ、s＝この会話だけ',
   '  /rj reset [p|s]：その保存先の設定を消す',
@@ -84,7 +86,7 @@ export function parseRj(args: string): Parsed {
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!
     if (LOOK_KEY.has(w) || EFFECT_KEY.has(w) || DOTS_KEY.has(w)) {
-      // クロードくんの語は、あとに値の語が付く（「演出」のあとの なし は、背景のオフではなく演出なし）
+      // クロードくんの語は、あとに値の語が付く（「演出」のあとの なし は、背景のオフではなく演出の low）
       const next = words[i + 1]
       if (LOOK_KEY.has(w)) {
         if (clawd.look !== undefined) return help('姿は1つだけ書けます。')
@@ -92,7 +94,7 @@ export function parseRj(args: string): Parsed {
         clawd.look = LOOKS[next]!
       } else if (EFFECT_KEY.has(w)) {
         if (clawd.effect !== undefined) return help('演出は1つだけ書けます。')
-        if (next === undefined || !own(EFFECTS, next)) return help('「演出」のあとに 自動・なし・medium・high・xhigh・max のどれかを書いてください。')
+        if (next === undefined || !own(EFFECTS, next)) return help('「演出」のあとに 自動・low・medium・high・xhigh・max のどれかを書いてください。')
         clawd.effect = EFFECTS[next]!
       } else {
         if (clawd.dots !== undefined) return help('ドットは1つだけ書けます。')

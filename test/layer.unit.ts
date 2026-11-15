@@ -81,7 +81,8 @@ test('大きさの上限：いちばん重い組み合わせでも、軽い版�
       for (const dots of ['fine', 'normal'] as const) {
         const h = look === 'haiku'
         const o = { look, phase, effect: 4, tempo: 4, showEffect: true, dots } as const
-        for (const leave of [[], [3]]) heavy.push(view({ ...o, subagents: h ? 2 : 5, arrive: h ? [1] : [4], leave }))
+        // 場所がぜんぶ埋まっているところ（帰る子の指定は、埋まった場所では絵に出ないので付けない）
+        heavy.push(view({ ...o, subagents: h ? 2 : 5, arrive: h ? [1] : [4], leave: [] }))
         // 実際に起きる重さ：4人（Haiku 1人）がいて1人が来たところ、もう1人が帰るところ
         heavy.push(view({ ...o, subagents: h ? 1 : 4, arrive: h ? [0] : [3], leave: h ? [1] : [4] }))
       }
@@ -90,7 +91,8 @@ test('大きさの上限：いちばん重い組み合わせでも、軽い版�
     const body = T5.clawdLayerBody(v)
     assert.ok(body.length <= T5.LAYER_BUDGET, `${name}: ${body.length}`)
     assert.ok(body.includes('#FF2D45'), `${name}: 演出が残る`)
-    const svg = sceneSvg(t, room, { layer: () => T5.clawdLayerBody(v), seamless: true })
+    // 層は上で作ったもの（同じ入力なら同じ文字列）を、そのまま部屋に入れる
+    const svg = sceneSvg(t, room, { layer: () => body, seamless: true })
     assert.ok(svg.length <= 131072, `${name}: 部屋こみ ${svg.length}`)
   }
   // ふつうのドットの Sonnet は、軽くしない演出のまま入る

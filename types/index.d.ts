@@ -1,4 +1,4 @@
-// rainy-window-jp の $.state の約束。カードの表示に使う値だけを置く（保存する設定は $.store）。
+// rainy-window-jp の $.state の約束。画面に出すための値（カードと、クロードくんの今の様子）だけを置く（保存する設定は $.store）。
 
 /** カードで選んでいる項目。押すとすぐ見た目が変わり、「保存して閉じる」で保存する。 */
 export type RjDraft = {
@@ -12,29 +12,25 @@ export type RjDraft = {
   scope: 'global' | 'project' | 'session'
   /** クロードくんの姿：自動（モデルに合わせる）、または決めた姿。 */
   look: 'auto' | 'sonnet' | 'haiku' | 'opus' | 'fable'
-  /** クロードくんの演出：自動（effort に合わせる）・なし、または決めた段階。 */
-  effect: 'auto' | 'none' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** クロードくんの演出：自動（effort に合わせる）、または決めた段階（low は演出なし）。 */
+  effect: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /** クロードくんのドット：ふつう・細かい。 */
   dots: 'normal' | 'fine'
 }
 
-/** 入力欄の上のカード（shape は card-5。card-4 までで書かれた古い値は、初期値＝閉じたカードとして読む）。 */
+/** 入力欄の上のカード（shape は card-6。card-5 までで書かれた古い値（タブの動きの印 tabFrom・tabMoving つきなど）は、初期値＝閉じたカードとして読む）。 */
 export type RjCard = {
   /** カードが出ている。 */
   isOpen: boolean
   /** 入力欄の上に出す（会話の中に置けない画面）。 */
   inBand: boolean
   draft: RjDraft | null
-  /** 「いま：…」の行。 */
+  /** 「保存してある設定：…」の行。 */
   nowLine: string
   /** 押して見ている選択が、まだ保存されていない。 */
   previewing: boolean
-  /** いま開いているタブ：🎨 背景（room）・🐾 クロードくんの見た目（clawd）。開いたときは room。 */
+  /** いま開いているタブ：背景（room）・クロードくん（clawd）。開いたときは room。 */
   tab: 'room' | 'clawd'
-  /** 1つ前のタブ。タブの上の吹き出しと下の帯は、ここから tab へ動く（同じなら動かない）。 */
-  tabFrom: 'room' | 'clawd'
-  /** タブを押してから約 1 秒のあいだ true：吹き出しと帯を動く絵にする。時計が消すと、止まった絵になる。 */
-  tabMoving: boolean
 }
 
 /** クロードくんの今の様子。Backdrop の1枚の絵は、これが変わると描き直される（shape は clawd-3）。 */
@@ -53,7 +49,7 @@ export type RjClawd = {
   /** 保存してあるクロードくんの設定（姿・演出・ドット）。 */
   choice: {
     look: 'auto' | 'sonnet' | 'haiku' | 'opus' | 'fable'
-    effect: 'auto' | 'none' | 'medium' | 'high' | 'xhigh' | 'max'
+    effect: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
     dots: 'normal' | 'fine'
   }
 }

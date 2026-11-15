@@ -11,7 +11,7 @@
 // サブエージェント、モデル）を見て動く。返事の流れ（turn.step）は読むだけで、止めず・落とさず・並べ替えず・変えない。
 
 import { atom, read, update } from 'claude-code'
-import type { ElementConstructor, EngineInterface, Register, SvgProps, ThemeSetArgs, TurnStepChunk } from 'claude-code'
+import type { ElementConstructor, EngineInterface, Register, RenderElement, SvgProps, ThemeSetArgs, TurnStepChunk } from 'claude-code'
 
 import type { RjCard, RjClawd, RjDraft } from '../types'
 import { DEFAULT_CHOICE, SOURCE_LABEL, describeChoice, effectiveBand, normalizeChoice, resolveChoice } from './lib/choice'
@@ -24,15 +24,15 @@ import { RJ_USAGE, parseRj } from './lib/command'
 import type { Scope } from './lib/command'
 import { buildTheme, roomColors } from './lib/palette'
 import { GLOBAL_KEY, mergeChoice, projectKeyOf, sessionKeyOf, sessionKeysToPrune, storeKeyFor } from './lib/store'
-import { STRIP_H, TABS, TAB_LABEL, TIP_H, TIP_TEXT, isTab, tabButtonLabel, tabRuleText, tabStripSvg, tabTipSvg } from './lib/tabs'
+import { TABS, TAB_LABEL, isTab } from './lib/tabs'
 import type { Tab } from './lib/tabs'
 import { bandOf, isSceneStale } from './lib/time'
 import type { Band } from './lib/time'
 import { clawdLayerBody, fitScene, layerBody, legacyInner } from './clawd/layer'
 import type { ClawdView } from './clawd/layer'
 import type { Look } from './clawd/scripts'
-import { TILE_H, TILE_W, clawdTiles } from './clawd/tiles'
-import type { ClawdTiles } from './clawd/tiles'
+import { effectTileSvg } from './clawd/tiles'
+import { roomTileSvg } from './room-tile'
 import { SCENE_ALT, sceneSvg } from './scene'
 
 /** The scene's name for 紺 at night, the original's look. Every other look has a name of its own (sceneNameOf). */
@@ -40,12 +40,15 @@ const SCENE = 'rainy-window-jp'
 const COMMAND = 'rj'
 const NONE = 'none'
 
-const CLOSED: RjCard = { isOpen: false, inBand: false, draft: null, nowLine: '', previewing: false, tab: 'room', tabFrom: 'room', tabMoving: false }
+const CLOSED: RjCard = { isOpen: false, inBand: false, draft: null, nowLine: '', previewing: false, tab: 'room' }
 // 検証（plugin validate）が読めるように、plugin と key は文字列のまま書く。
-// タブの動きの印（tabMoving）を足したので card-5（card-4 までの古い値は、閉じたカードとして読む）。
-const card = atom({ plugin: 'rainy-window-jp', key: 'card' } as const, CLOSED, { shape: 'card-5' })
+// タブの動きの印（tabFrom・tabMoving）を無くしたので card-6（card-5 までの古い値は、閉じたカードとして読む）。
+const card = atom({ plugin: 'rainy-window-jp', key: 'card' } as const, CLOSED, { shape: 'card-6' })
 
-/** クロードくんの様子の標準。層（Svg）だけを描き直すために、部屋とは別の atom に置く。 */
+/**
+ * クロードくんの様子の標準。カードとは別の atom に置く（背景のタブのカードは、クロードくんが動いても描き直さない）。
+ * 部屋とクロードくんは1枚の絵なので、これが変わると絵ぜんたいを描き直す。
+ */
 const CLAWD_NOW: RjClawd = { phase: 'wait', model: '', effort: '', subagents: 0, arrive: [], leave: [], choice: { ...DEFAULT_CLAWD } }
 // choice を足し、確かめ（probe）を外したので clawd-3（古い値は、標準として読む）。
 const clawd = atom({ plugin: 'rainy-window-jp', key: 'clawd' } as const, CLAWD_NOW, { shape: 'clawd-3' })
@@ -57,16 +60,10 @@ let shownKey: string | undefined
 let drawn: { scene: string; clawdKey: string; source: string; madeAt: number } | undefined
 /** The card shows a choice that is not saved yet: a turn's start leaves the window as it is. */
 let isPreviewing = false
-let keysKept: { root: string; keys: Keys } | undefined
+/** フォルダのキーの覚え（リポジトリと .git を調べ直さない）。会話のキーは覚えない（keysOf）。 */
+let projectKept: { root: string; project: string } | undefined
 /** モデルの見張り（1.5秒ごと）の時計。 */
 let stopModelWatch: { cancel: () => void } | undefined
-/** タブの動きの印を消す時計（タブを押してから TAB_MOVE_MS あと。いつも1つだけ）。 */
-let tabMoveTimer: { cancel: () => void } | undefined
-/**
- * タブを押してから、吹き出しと帯を動く絵にしておく間。過ぎたら止まった絵にする（入力欄の上の帯は、スクロールするたびに
- * カードの絵を作り直すので、動く絵のままだと、出だしの動きがくり返されてしまう）。ばねは 1 秒より前に止まる（tabs.ts）。
- */
-const TAB_MOVE_MS = 1000
 /** クロードくんの atom に最後に書いた時刻（$.clock.now）と、2秒あけるために待たせている書き込み（書く回の並び。先頭を次に書く）。 */
 let lastPublishAt = -Infinity
 let pendingPublish: { timer: { cancel: () => void }; slots: Slot[] } | undefined
@@ -182,24 +179,30 @@ function cancelQuietly(timer: { cancel: () => void } | undefined): void {
   }
 }
 
-/** The store's keys for this session's project and for the session itself, made once per root. */
+/**
+ * The store's keys for this session's project and for the session itself. The project's key is made once per root.
+ * 会話のキーは覚えずに毎回読む：/clear や再開のあとは、同じ窓のまま会話の id が変わり、session.start は来ない
+ * （覚えたままだと、前の会話のキーに読み書きしてしまう）。
+ */
 async function keysOf($: EngineInterface): Promise<Keys> {
   const root = await $.session.root()
-  if (keysKept !== undefined && keysKept.root === root) return keysKept.keys
-  const repo = await tryOr(() => $.session.repo())
-  const repoRoot = repo?.root ?? null
-  let linked = false
-  if (repoRoot !== null) {
-    const sep = root.includes('\\') ? '\\' : '/'
-    const git = await tryOr(() => $.fs.stat(root.replace(/[\\/]+$/, '') + sep + '.git'))
-    linked = git?.kind === 'file'
+  let project = projectKept !== undefined && projectKept.root === root ? projectKept.project : undefined
+  if (project === undefined) {
+    const repo = await tryOr(() => $.session.repo())
+    const repoRoot = repo?.root ?? null
+    let linked = false
+    if (repoRoot !== null) {
+      const sep = root.includes('\\') ? '\\' : '/'
+      const git = await tryOr(() => $.fs.stat(root.replace(/[\\/]+$/, '') + sep + '.git'))
+      linked = git?.kind === 'file'
+    }
+    project = projectKeyOf(root, repoRoot, linked)
+    projectKept = { root, project }
   }
   // 会話の id：デスクトップアプリが渡す、会話の行の id（/clear しても変わらない）を先に使う。無ければ Claude Code の会話の id。
   const hostId = await tryOr(() => $.env.get('CLAUDE_CODE_HOST_SESSION_ID'))
   const id = hostId !== undefined && hostId !== '' ? hostId : await tryOr(() => $.session.id())
-  const keys = { project: projectKeyOf(root, repoRoot, linked), session: sessionKeyOf(id) }
-  keysKept = { root, keys }
-  return keys
+  return { project, session: sessionKeyOf(id) }
 }
 
 /** The three stored layers, as stored: resolveChoice reads a broken one as absent. */
@@ -750,15 +753,16 @@ async function pickItem($: EngineInterface, change: Partial<RjDraft>): Promise<v
 async function saveDraft($: EngineInterface): Promise<void> {
   const draft = (await read($, card)).draft
   if (draft === null) return
-  isPreviewing = false
   // 背景とクロードくんを、選んだ保存先にまとめて保存する（設計書 §3.5・§3.6）。
   const choice = choiceOf(draft)
   try {
     await writeChoice($, draft.scope, choice)
   } catch (error) {
+    // 保存できなかったときは、カードも試している見た目もそのまま（試している途中の印を消さない）。
     $.ui.toast(`rainy-window-jp: 保存できませんでした（${messageOf(error)}）`)
     return
   }
+  isPreviewing = false
   // The look shown may be the one saved already: then nothing is set again.
   const resolved = await follow($, false)
   // 保存した（いま効いている）クロードくんの設定を、カードを閉じる前に atom へ今書く。2秒の間隔を待つと、
@@ -776,13 +780,14 @@ async function saveDraft($: EngineInterface): Promise<void> {
 async function clearDraftScope($: EngineInterface): Promise<void> {
   const draft = (await read($, card)).draft
   if (draft === null) return
-  isPreviewing = false
   try {
     await clearChoice($, draft.scope)
   } catch (error) {
+    // 消せなかったときも、カードと試している見た目はそのまま。
     $.ui.toast(`rainy-window-jp: 消せませんでした（${messageOf(error)}）`)
     return
   }
+  isPreviewing = false
   const resolved = await follow($, false)
   $.ui.toast(`${SCOPE_LABEL[draft.scope]}の設定を消しました。${nowLineOf(resolved)}`)
   await updateCard($, was => ({
@@ -807,55 +812,22 @@ async function closeCard($: EngineInterface): Promise<void> {
 /** Opens the card above the prompt, where it stays while the conversation scrolls. */
 async function openCard($: EngineInterface): Promise<void> {
   const resolved = resolveChoice(await readLayers($))
-  stopTabMove()
   await updateCard($, (): RjCard => ({
     isOpen: true,
     inBand: true,
     draft: draftOf(resolved.choice, resolved.source),
     nowLine: nowLineOf(resolved),
     previewing: false,
-    // 開くときは、いつも 🎨 背景 のタブから（吹き出しと帯は動かない）。
+    // 開くときは、いつも背景のタブから。
     tab: 'room',
-    tabFrom: 'room',
-    tabMoving: false,
   }))
 }
 
-/** タブの動きの時計を止める（止められなくても続ける）。 */
-function stopTabMove(): void {
-  cancelQuietly(tabMoveTimer)
-  tabMoveTimer = undefined
-}
-
-/** タブの動きの印を消す（時計が来た、または同じ窓で会話が続く）。待っている時計があるとき（押し直した）と、印が無いときは書かない。 */
-async function endTabMove($: EngineInterface): Promise<void> {
-  if (tabMoveTimer !== undefined || (await read($, card)).tabMoving !== true) return
-  await updateCard($, was => (tabMoveTimer === undefined ? { ...was, tabMoving: false } : was))
-}
-
-/**
- * タブを押した：今のタブを tabFrom に、新しいタブを tab に置き、動きの印（tabMoving）を付ける。吹き出しと帯の SVG は
- * tabFrom → tab と印で決まるので、押してから TAB_MOVE_MS（1 秒）のあいだだけ動く絵になり、そのあとは時計が印を消して
- * 止まった絵になる。1 秒のうちにまた切りかえたら、前の時計は取り消して、そこから数え直す。
- * いま開いているタブをもう一度押したときは何もしない（動き直させない）。時計が使えなければ、印は付けない（止まった絵）。
- */
+/** タブを押した：新しいタブを tab に置く。いま開いているタブをもう一度押したときは何もしない。 */
 async function pickTab($: EngineInterface, tab: Tab): Promise<void> {
   const now = await read($, card)
   if (!now.isOpen || now.tab === tab) return
-  stopTabMove()
-  let moving = false
-  try {
-    const timer = $.clock.after(TAB_MOVE_MS, () => {
-      if (tabMoveTimer !== timer) return
-      tabMoveTimer = undefined
-      soon($, 'tab', () => endTabMove($))
-    })
-    tabMoveTimer = timer
-    moving = true
-  } catch {
-    // 時計が使えないときは動かさない（印が残って、描き直しのたびに動き直さないように）。
-  }
-  await updateCard($, was => ({ ...was, tabFrom: isTab(was.tab) ? was.tab : 'room', tab, tabMoving: moving }))
+  await updateCard($, was => ({ ...was, tab }))
 }
 
 /** カードが開いていたら、打って変えた設定にカードを合わせる（あとで古い選択を保存してしまわないように）。 */
@@ -870,21 +842,24 @@ async function syncOpenCard($: EngineInterface, resolved: { choice: Choice; sour
 }
 
 
-async function runCommand($: EngineInterface, args: string): Promise<string> {
+/**
+ * /rj の答えの文。引数なし（カードを開く・閉じる）のときは文を返さない（undefined）：デスクトップは、返した文を
+ * 「/rj はここでは使用できないコマンドです。」に置きかえて出すので。カードが開く・閉じること自体が答えになる。
+ * 引数つき・使い方・reset の文は、今までどおり返す（ターミナルで確かめるのに要る）。
+ */
+async function runCommand($: EngineInterface, args: string): Promise<string | undefined> {
   const parsed = parseRj(args)
   if (parsed.kind === 'card') {
     // The same command opens the card and closes it.
-    if ((await read($, card)).isOpen) {
-      await closeCard($)
-      return 'カードを閉じました。'
-    }
-    await openCard($)
-    return '入力欄の上のカードで色を押すと、すぐ背景が変わります。気に入ったら「保存して閉じる」を押してください。'
+    if ((await read($, card)).isOpen) await closeCard($)
+    else await openCard($)
+    return undefined
   }
   if (parsed.kind === 'help') return `${parsed.reason}\n${RJ_USAGE}`
-  isPreviewing = false
+  // 試している途中の印（isPreviewing）は、消す・保存するのがうまくいってから消す（失敗したら、カードで試している見た目はそのまま）。
   if (parsed.kind === 'reset') {
     await clearChoice($, parsed.scope)
+    isPreviewing = false
     const resolved = await follow($, true)
     await syncOpenCard($, resolved)
     return `${SCOPE_LABEL[parsed.scope]}の設定を消しました。${nowLineOf(resolved)}。${othersNote(parsed.scope)}`
@@ -902,6 +877,7 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
   const base = hasBackground ? stored : (normalizeChoice(stored) ?? resolveChoice(await readLayers($)).choice)
   const choice = mergeChoice(base, patch)
   await writeChoice($, parsed.scope, choice)
+  isPreviewing = false
   const resolved = await follow($, hasBackground)
   await syncOpenCard($, resolved)
   const saved = [...(hasBackground ? [describeChoice(choice)] : []), ...(parsed.clawd !== undefined ? [describeClawdPatch(parsed.clawd)] : [])]
@@ -912,48 +888,68 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
 type Parts = ReturnType<EngineInterface['ui']['resolve']>
 type CardParts = { Box: Parts['Box']; Text: Parts['Text']; Button: Parts['Button'] }
 /**
- * デスクトップ・スマホだけ：カードの Svg（タブの上の吹き出し・タブの下の帯・見た目のタブの小さな絵）と、吹き出しと帯の横幅（CSS px）。ターミナルには無い。
- * どの Svg にも isInteractive は付けず（枠にすると、スクロールする帯の中で、ホイールが取られてスクロールが詰まった）、大きさだけ付けて画像で描く。
+ * デスクトップ・スマホだけ：カードの Svg（背景のタブの部屋の絵、クロードくんのタブの大きな絵）。ターミナルには無い。
+ * Svg に isInteractive は付けず（枠にすると、スクロールする帯の中で、ホイールが取られてスクロールが詰まった）、大きさだけ付けて画像で描く。
  * 部屋の1枚には何も付けない。
  */
-type CardArt = { Svg: ElementConstructor<SvgProps>; width: number }
+type CardArt = { Svg: ElementConstructor<SvgProps> }
 /**
- * 見た目のタブに出す、いまのクロードくん：自動のボタンに添える姿と effort（分からなければ undefined）、
- * 小さな絵（姿の行・演出の行。作れなかったときやターミナルでは undefined）と、演出の絵の姿（カードで選んでいる姿。自動なら今のモデルの姿）。
+ * クロードくんのタブに出す、いまのクロードくん：自動のボタンに添える姿と effort（分からなければ undefined）と、
+ * 大きな絵（カードで選んでいる姿・演出・ドット・部屋の色。作れなかったときやターミナルでは undefined）。
  */
-type ClawdCard = { autoLook: Look; autoEffort: string | undefined; tiles: ClawdTiles | undefined; workLook: Look }
+type ClawdCard = { autoLook: Look; autoEffort: string | undefined; picture: string | undefined; workLook: Look; level: number }
 
-// Each color carries a mark of its own, so it can be found without reading.
-const COLOR_BUTTONS: [Exclude<ThemeName, 'なし'>, string][] = [
-  ['紺', '🟦 紺'],
-  ['緑', '🟩 緑'],
-  ['桜', '🌸 桜'],
-  ['橙', '🟧 橙'],
-  ['灰', '⬜ 灰'],
-]
+// 背景のタブの部屋の絵（横:縦 = 16:10）と、クロードくんのタブの大きな絵（横:縦 = 4:3）の大きさ（CSS px）。
+// 帯は窓の高さで低くなる（2026-11-15 の写真では、見える高さが約 248〜270px）。どちらのタブも 248px に収まる大きさにしてある。
+export const ROOM_TILE_W = 104
+export const ROOM_TILE_H = 65
+export const CLAWD_PICTURE_W = 200
+export const CLAWD_PICTURE_H = 150
+
+const COLOR_BUTTONS: Exclude<ThemeName, 'なし'>[] = ['紺', '緑', '桜', '橙', '灰']
 const TIME_BUTTONS: RjDraft['time'][] = ['自動', '朝', '昼', '夕方', '夜']
-const SCOPE_BUTTONS: Scope[] = ['global', 'project', 'session']
-/** The app's own light or dark mode changes the room the most, and a mod cannot set it: the card says where it is. */
-const APPEARANCE_HINT = '💡 明るい・暗いは、アプリの 設定 → 外観 → テーマ（🖥 ☀ 🌙）で切り替えます。☀ は昼の部屋、🌙 は夜の部屋、🖥 は Windows に合わせます。'
+/**
+ * 部屋が昼になるか夜になるかは、アプリの明るさ（設定 → 外観 → テーマ）で決まる。mod からは変えられず、設定画面も開けないので、道順を書く。
+ * 絵文字は U+FE0F を付けて絵文字の形で出す（付けないと ☀ は小さな文字の形になる）。
+ */
+const ROUTE = ['部屋が昼（☀️）になるか夜（🌙）になるかは、Claude アプリの', '「設定」→「外観」→「テーマ」', 'で決まります'] as const
+/** low は effort の段階の名前だが、ここでは「演出なし」のこと。 */
+const LOW_NOTE = 'low は、effort が low のときと同じで、演出は出ません'
 
 /** クロードくんの姿の名前（ボタンと、自動のボタンに添える「いま …」）。 */
 const LOOK_NAME: Record<Look, string> = { sonnet: 'Sonnet', haiku: 'Haiku', opus: 'Opus', fable: 'Fable' }
 const LOOK_BUTTONS: Exclude<RjDraft['look'], 'auto'>[] = ['sonnet', 'haiku', 'opus', 'fable']
-const EFFECT_BUTTONS: [Exclude<RjDraft['effect'], 'auto'>, string][] = [
-  ['none', 'なし'],
-  ['medium', 'medium'],
-  ['high', 'high'],
-  ['xhigh', 'xhigh'],
-  ['max', 'max'],
-]
-const DOTS_BUTTONS: [RjDraft['dots'], string][] = [
-  ['normal', 'ふつう'],
-  ['fine', '細かい'],
-]
-/** 吹き出しと帯の絵の横幅（CSS px、カードの横幅の見当）。ボタンは左から並ぶので、帯の位置はこの幅によらない（吹き出しは、この幅の中に収める。狭い画面だけ小さく）。 */
-const ART_WIDTH = { desktop: 600, mobile: 320 } as const
+const EFFECT_BUTTONS: Exclude<RjDraft['effect'], 'auto'>[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const LEVEL_NAME = ['なし', 'medium', 'high', 'xhigh', 'max']
+/**
+ * 保存先とドットは、押すたびに次の値へ切りかわるボタン（ラベルに今の値と ▸）。下の行を1行に収めるため。
+ * 選ぶ欄（Select）は使わない：2026-11-15、選ぶ欄と大きな絵を入れたカードが本物のアプリで出なかった。どちらが原因かは分からないので、
+ * 本物のアプリで描けていた部品（箱・文字・ボタン・絵）だけにしてある。
+ */
+const NEXT_SCOPE: Record<Scope, Scope> = { global: 'project', project: 'session', session: 'global' }
+const DOTS_NAME: Record<RjDraft['dots'], string> = { normal: 'ふつう', fine: '細かい' }
+const NEXT_DOTS: Record<RjDraft['dots'], RjDraft['dots']> = { normal: 'fine', fine: 'normal' }
 
-const mark = (isOn: boolean, word: string) => (isOn ? `${word} ✓` : word)
+/** 選んでいるボタンの見せ方：濃いボタン（primary）。ターミナルは色だけでは分かりにくいので、ラベルの終わりに ✓ も付ける。 */
+type Marker = (isOn: boolean, word: string) => { label: string; variant?: 'primary' }
+const markerFor =
+  (surface: string): Marker =>
+  (isOn, word) =>
+    isOn ? { label: surface === 'terminal' ? `${word} ✓` : word, variant: 'primary' } : { label: word }
+
+/** 見出しとボタンの行：見出しは縮まない箱に入れ、ボタンは折り返す箱にまとめる（狭い画面でも見出しの下にもぐらない）。 */
+function headRow({ Box, Text }: CardParts, head: string, buttons: RenderElement[]) {
+  return (
+    <Box flexDirection="row" gap={1} alignItems="center">
+      <Box flexShrink={0}>
+        <Text>{head}</Text>
+      </Box>
+      <Box flexDirection="row" flexWrap="wrap" gap={1}>
+        {buttons}
+      </Box>
+    </Box>
+  )
+}
 
 /** カードのボタンを押したとき：保存せずに、その場で見た目を変える（押したときの関数を作る）。 */
 function pickWith($: EngineInterface): (change: Partial<RjDraft>) => () => Promise<void> {
@@ -961,186 +957,205 @@ function pickWith($: EngineInterface): (change: Partial<RjDraft>) => () => Promi
 }
 
 /**
- * 見た目のタブに出す、いまのクロードくん：自動のボタンに添える姿（モデルから）と effort（分かるときだけ）、
- * 小さな止まった絵（withTiles のとき）。姿の絵は姿ごとに決まった絵（Claude の状態では変わらない）、演出の絵は
- * カードで選んでいる姿が書いているところに、その演出。演出の「自動」は今の effort（分からなければ なし）。
+ * クロードくんのタブに出す、いまのクロードくん：自動のボタンに添える姿（モデルから）と effort（分かるときだけ）、
+ * 大きな絵（withPicture のとき）。絵は、カードで選んでいる姿が書いているところに、選んでいる演出（自動なら今の effort。分からなければ演出なし）。
  * ドットと部屋の色は、カードで選んでいるもの。読めない・作れないときは添えない（カードは描く）。
  */
-async function clawdCardNow($: EngineInterface, now: RjCard, withTiles: boolean): Promise<ClawdCard | undefined> {
+async function clawdCardNow($: EngineInterface, now: RjCard, withPicture: boolean): Promise<ClawdCard | undefined> {
   try {
     const atomNow = await clawdNow($)
     const model = typeof atomNow.model === 'string' && atomNow.model !== '' ? atomNow.model : startModel
-    const level = levelOfEffort(atomNow.effort)
-    const autoEffort = level === undefined ? undefined : String(atomNow.effort)
+    const autoEffort = levelOfEffort(atomNow.effort) === undefined ? undefined : String(atomNow.effort)
     const autoLook = lookOfModel(model)
     const draft = now.draft ?? draftOf(DEFAULT_CHOICE, 'default')
     const chosen = clawdOfDraft(draft)
     const workLook = chosen.look === 'auto' ? autoLook : chosen.look
-    let tiles: ClawdTiles | undefined
-    if (withTiles) {
+    // 演出の段階は、部屋のクロードくんと同じ決まり（viewOf）で決める
+    const level = viewOf({ choice: chosen, model, effort: atomNow.effort, phase: 'write', subagents: 0, cardOpen: true }).effect
+    let picture: string | undefined
+    if (withPicture) {
       try {
         const shown = choiceOf(draft)
-        tiles = clawdTiles({ autoLook, look: workLook, autoLevel: level ?? 0, dots: chosen.dots, room: roomColors(shown.theme, effectiveBand(shown, new Date())) })
+        picture = effectTileSvg(workLook, level, chosen.dots, roomColors(shown.theme, effectiveBand(shown, new Date())))
       } catch (err) {
-        clawdTrouble($, 'tiles', err)
+        clawdTrouble($, 'picture', err)
       }
     }
-    return { autoLook, autoEffort, tiles, workLook }
+    return { autoLook, autoEffort, picture, workLook, level }
   } catch (err) {
     clawdTrouble($, 'card', err)
     return undefined
   }
 }
 
-/** 🎨 背景のタブの中身：状態の行と、背景色・時間帯の行（今までのカードと同じ言葉・同じ順）。 */
-function roomRows($: EngineInterface, { Box, Text, Button }: CardParts, now: RjCard, draft: RjDraft) {
-  const pick = pickWith($)
-  const status = now.previewing ? `表示中：${describeChoice(choiceOf(draft))}（まだ保存していません）　／　${now.nowLine}` : now.nowLine
-  return [
-    <Text dimColor>{status}</Text>,
-    <Box flexDirection="row" gap={1}>
-      <Text>背景色　</Text>
-      {COLOR_BUTTONS.map(([theme, name]) => {
-        const word = mark(draft.theme === theme, name)
-        return (
-          <Button key={`rj-color-${theme}`} label={word} onPress={pick({ theme })}>
-            {word}
-          </Button>
-        )
-      })}
-    </Box>,
-    <Box flexDirection="row" gap={1}>
-      <Text>時間帯　</Text>
-      {TIME_BUTTONS.map(time => {
-        const word = mark(draft.time === time, time === '自動' ? `自動（いま${bandOf(new Date())}）` : time)
-        return (
-          <Button key={`rj-time-${time}`} label={word} onPress={pick({ time })}>
-            {word}
-          </Button>
-        )
-      })}
-    </Box>,
-  ]
-}
-
 /**
- * 🐾 クロードくんの見た目のタブの中身：姿・演出・ドットの行。デスクトップ・スマホでは、姿と演出の行を小さな止まった絵の
- * 一覧にする（1つずつ、絵の下にそのボタン。Button は絵を持てず、Box は押せないので、絵はボタンの上に置く）。
- * 押すと保存せずに、すぐ部屋のクロードくんが変わる。自動のボタンには、今のモデルの姿と今の effort を添える。
- * ターミナル（Svg が無い）と、絵を作れなかったときは、今までどおりボタンだけの行。
+ * 背景のタブの中身：背景色（部屋の絵の下にボタン）、明るさの道順、時間帯。
+ * 部屋の絵は、暗い画面の部屋の上に明るい画面の部屋を右下半分だけ重ねたもの（room-tile.ts）。時間帯は、カードで選んでいるもの。
  */
-function clawdRows($: EngineInterface, { Box, Text, Button }: CardParts, draft: RjDraft, art: CardArt | undefined, now: ClawdCard | undefined) {
+function roomRows($: EngineInterface, parts: CardParts, draft: RjDraft, art: CardArt | undefined, mark: Marker) {
+  const { Box, Text, Button } = parts
   const pick = pickWith($)
-  const autoLook = now === undefined ? '自動' : `自動（いま ${LOOK_NAME[now.autoLook]}）`
-  const autoEffect = now?.autoEffort === undefined ? '自動' : `自動（いま ${now.autoEffort}）`
-  const looks: [RjDraft['look'], string][] = [['auto', autoLook], ...LOOK_BUTTONS.map(look => [look, LOOK_NAME[look]] as [RjDraft['look'], string])]
-  const effects: [RjDraft['effect'], string][] = [['auto', autoEffect], ...EFFECT_BUTTONS]
-  const button = <K extends 'look' | 'effect' | 'dots'>(item: K, value: RjDraft[K], name: string) => {
-    const word = mark(draft[item] === value, name)
+  const band = effectiveBand(choiceOf(draft), new Date())
+  const colorButton = (theme: Exclude<ThemeName, 'なし'>) => {
+    const { label, variant } = mark(draft.theme === theme, theme)
     return (
-      <Button key={`rj-${item}-${value}`} label={word} onPress={pick({ [item]: value } as Partial<RjDraft>)}>
-        {word}
+      <Button key={`rj-color-${theme}`} label={label} {...(variant ? { variant } : {})} onPress={pick({ theme })}>
+        {label}
       </Button>
     )
   }
-  const row = <K extends 'look' | 'effect' | 'dots'>(head: string, item: K, list: [RjDraft[K], string][]) => (
-    <Box flexDirection="row" gap={1}>
-      <Text>{head}</Text>
-      {list.map(([value, name]) => button(item, value, name))}
+  // 昼か夜かの道順：枠なしの薄い字の1行（背景のタブを低くして、帯の高さに収める）
+  const route = (
+    <Box flexDirection="row" flexWrap="wrap">
+      <Text dimColor>{ROUTE[0]}</Text>
+      <Text dimColor bold>
+        {ROUTE[1]}
+      </Text>
+      <Text dimColor>{ROUTE[2]}</Text>
     </Box>
   )
-  const tiles = now?.tiles
-  if (art === undefined || tiles === undefined || now === undefined) return [row('姿　　　', 'look', looks), row('演出　　', 'effect', effects), row('ドット　', 'dots', DOTS_BUTTONS)]
-  // 絵の一覧の行：狭い画面では折り返す。絵の説明（alt）は、その絵のボタンと同じ名前
-  const gallery = <K extends 'look' | 'effect'>(head: string, item: K, list: [RjDraft[K], string][], tileOf: (value: RjDraft[K]) => string, alt: (name: string) => string) => (
-    <Box flexDirection="row" gap={1}>
-      <Text>{head}</Text>
-      <Box flexDirection="row" flexWrap="wrap" gap={1}>
-        {list.map(([value, name]) => (
-          <Box key={`rj-tile-${item}-${value}`} flexDirection="column" alignItems="center" gap="xs">
-            <art.Svg source={tileOf(value)} alt={alt(name)} width={TILE_W} height={TILE_H} />
-            {button(item, value, name)}
-          </Box>
-        ))}
+  if (art === undefined) return [headRow(parts, '背景色　', COLOR_BUTTONS.map(colorButton)), route, timeRow(parts, draft, mark, pick)]
+  const colors = (
+    <Box flexDirection="row" gap={1} alignItems="center">
+      <Box flexShrink={0}>
+        <Text>背景色　</Text>
+      </Box>
+      <Box flexDirection="column" gap="xs" flexShrink={1}>
+        <Box flexDirection="row" flexWrap="wrap" gap="sm">
+          {COLOR_BUTTONS.map(theme => (
+            <Box key={`rj-tile-color-${theme}`} flexDirection="column" alignItems="center" gap="xs">
+              <art.Svg
+                source={roomTileSvg(roomColors(theme, band), ROOM_TILE_W, ROOM_TILE_H)}
+                alt={`部屋の絵：${theme}（左上は暗い画面、右下は明るい画面）`}
+                width={ROOM_TILE_W}
+                height={ROOM_TILE_H}
+              />
+              {colorButton(theme)}
+            </Box>
+          ))}
+        </Box>
+        {route}
       </Box>
     </Box>
   )
+  return [colors, timeRow(parts, draft, mark, pick)]
+}
+
+/** 時間帯の行 */
+function timeRow(parts: CardParts, draft: RjDraft, mark: Marker, pick: ReturnType<typeof pickWith>) {
+  const { Button } = parts
+  return headRow(
+    parts,
+    '時間帯　',
+    TIME_BUTTONS.map(time => {
+      const { label, variant } = mark(draft.time === time, time === '自動' ? `自動（いま${bandOf(new Date())}）` : time)
+      return (
+        <Button key={`rj-time-${time}`} label={label} {...(variant ? { variant } : {})} onPress={pick({ time })}>
+          {label}
+        </Button>
+      )
+    }),
+  )
+}
+
+/**
+ * クロードくんのタブの中身：左に、いま選んでいる姿と演出の大きな絵（押すたびに変わる）、右に姿・演出のボタン。
+ * 押すと保存せずに、すぐ部屋のクロードくんも変わる。自動のボタンには、今のモデルの姿と今の effort を添える。
+ * ターミナル（Svg が無い）と、絵を作れなかったときは、ボタンの行だけ。
+ */
+function clawdRows($: EngineInterface, parts: CardParts, draft: RjDraft, art: CardArt | undefined, now: ClawdCard | undefined, mark: Marker) {
+  const { Box, Text, Button } = parts
+  const pick = pickWith($)
+  const autoLook = now === undefined ? '自動' : `自動（いま ${LOOK_NAME[now.autoLook]}）`
+  const autoEffect = now?.autoEffort === undefined ? '自動' : `自動（いま ${now.autoEffort}）`
+  const button = <K extends 'look' | 'effect'>(item: K, value: RjDraft[K], name: string) => {
+    const { label, variant } = mark(draft[item] === value, name)
+    return (
+      <Button key={`rj-${item}-${value}`} label={label} {...(variant ? { variant } : {})} onPress={pick({ [item]: value } as Partial<RjDraft>)}>
+        {label}
+      </Button>
+    )
+  }
+  const rows = [
+    headRow(parts, '姿　　　', [button('look', 'auto', autoLook), ...LOOK_BUTTONS.map(look => button('look', look, LOOK_NAME[look]))]),
+    headRow(parts, '演出　　', [button('effect', 'auto', autoEffect), ...EFFECT_BUTTONS.map(effect => button('effect', effect, effect))]),
+    <Text dimColor>{LOW_NOTE}</Text>,
+  ]
+  if (art === undefined || now?.picture === undefined) return rows
   return [
-    gallery('姿　　　', 'look', looks, value => tiles.looks[value], name => `クロードくんの絵：姿 ${name}`),
-    gallery('演出　　', 'effect', effects, value => tiles.effects[value], name => `クロードくんの絵：${LOOK_NAME[now.workLook]}・演出 ${name}`),
-    row('ドット　', 'dots', DOTS_BUTTONS),
+    <Box flexDirection="row" gap="md" alignItems="flex-start">
+      <Box key="rj-picture" flexShrink={0}>
+        <art.Svg
+          source={now.picture}
+          alt={`クロードくんの絵：${LOOK_NAME[now.workLook]}・演出 ${LEVEL_NAME[now.level] ?? 'なし'}`}
+          width={CLAWD_PICTURE_W}
+          height={CLAWD_PICTURE_H}
+        />
+      </Box>
+      <Box flexDirection="column" gap="sm" flexShrink={1}>
+        {rows}
+      </Box>
+    </Box>,
   ]
 }
 
 /**
- * 入力欄の上のカード：見出し → タブの吹き出し → タブのボタン → 帯（ターミナルは線の文字）→ タブの中身 → 保存先 → ボタン。
- * 🎨 背景のタブは今までのカードの中身（状態の行・背景色・時間帯・オフにする・明るさの案内）を、今までと同じ場所に描く。
- * 🐾 クロードくんの見た目のタブは、姿・演出の小さな止まった絵の一覧（絵の下にボタン）と、ドットの行。保存先と「保存して閉じる」「保存先の設定を消す」は両方のタブで共通。
+ * 入力欄の上のカード：タブの行（タブ・保存してある設定・閉じる）→ タブの中身 → 下の行（保存先・ドット・設定を消す・背景を使わない・保存して閉じる）。
  * 押すと保存せずにすぐ見た目を変える（続けて試せる）。「保存して閉じる」で保存先に背景とクロードくんをまとめて保存し、
- * 「閉じる」で保存してある見た目に戻す。
- * デスクトップのボタンはラベルの文字だけを描き、行は折り返さないので、ラベルは短くし、✓ もラベルに入れる。
- * 選んだタブのボタンは primary で、どの画面でもラベルの終わりに ✓（吹き出しのしっぽと帯の位置の見当も、この ✓ の幅を入れて決める）。
+ * 「閉じる」で保存してある見た目に戻す。保存先とドットは押すたびに切りかわるボタンにして、下の行を1行に収める。
+ * 選んでいるボタンは濃いボタン（ターミナルは ✓ も）。行の間は小さく（xs）して、窓が低いときも帯の高さに収める。
  */
-function cardView($: EngineInterface, parts: CardParts, now: RjCard, art: CardArt | undefined, clawdNowCard: ClawdCard | undefined) {
+function cardView($: EngineInterface, parts: CardParts, now: RjCard, art: CardArt | undefined, clawdNowCard: ClawdCard | undefined, surface: string) {
   const { Box, Text, Button } = parts
   const draft = now.draft ?? draftOf(DEFAULT_CHOICE, 'default')
   const tab: Tab = isTab(now.tab) ? now.tab : 'room'
-  const from: Tab = isTab(now.tabFrom) ? now.tabFrom : tab
-  // 動く絵は、タブを押してから印が消えるまで（約 1 秒）だけ。ほかのときは止まった絵（行き先のタブの形）
-  const moving = now.tabMoving === true
   const pick = pickWith($)
-  const inRoom = tab === 'room'
-  const off = mark(draft.theme === 'なし', 'オフにする')
+  const mark = markerFor(surface)
+  const status = now.previewing ? `まだ保存していません　／　${now.nowLine}` : now.nowLine
+  const off = mark(draft.theme === 'なし', '背景を使わない')
+  const scopeLabel = `保存先：${SCOPE_LABEL[draft.scope]} ▸`
+  const dotsLabel = `ドット：${DOTS_NAME[draft.dots]} ▸`
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} gap="sm">
-      <Box flexDirection="row" justifyContent="space-between" gap={1}>
-        <Text bold>Rainy window JP</Text>
+    <Box flexDirection="column" borderStyle="round" paddingX={1} gap="xs">
+      <Box flexDirection="row" gap={1} alignItems="center" marginBottom="xs">
+        {TABS.map(t => {
+          const { label, variant } = mark(t === tab, TAB_LABEL[t])
+          return (
+            <Button key={`rj-tab-${t}`} label={label} {...(variant ? { variant } : {})} onPress={() => safely($, () => pickTab($, t))}>
+              {label}
+            </Button>
+          )
+        })}
+        <Box flexGrow={1} flexShrink={1} alignItems="flex-end">
+          <Text dimColor wrap="truncate-end">
+            {status}
+          </Text>
+        </Box>
         <Button key="rj-close" label="閉じる" role="dismiss" onPress={() => safely($, () => closeCard($))}>
           閉じる
         </Button>
       </Box>
-      {art === undefined ? null : <art.Svg source={tabTipSvg(from, tab, art.width, moving)} alt={TIP_TEXT[tab]} width={art.width} height={TIP_H} />}
-      <Box flexDirection="row" gap={1}>
-        {TABS.map(t => {
-          const word = tabButtonLabel(t, t === tab)
-          return (
-            <Button key={`rj-tab-${t}`} label={word} {...(t === tab ? { variant: 'primary' as const } : {})} onPress={() => safely($, () => pickTab($, t))}>
-              {word}
-            </Button>
-          )
-        })}
-      </Box>
-      {art === undefined ? (
-        <Text dimColor>{tabRuleText(tab)}</Text>
-      ) : (
-        <art.Svg source={tabStripSvg(from, tab, art.width, moving)} alt={`選んでいるタブ：${TAB_LABEL[tab]}`} width={art.width} height={STRIP_H} />
-      )}
-      {inRoom ? roomRows($, parts, now, draft) : clawdRows($, parts, draft, art, clawdNowCard)}
-      <Box flexDirection="row" gap={1}>
-        <Text>保存先　</Text>
-        {SCOPE_BUTTONS.map(scope => {
-          const word = mark(draft.scope === scope, SCOPE_LABEL[scope])
-          return (
-            <Button key={`rj-scope-${scope}`} label={word} onPress={pick({ scope })}>
-              {word}
-            </Button>
-          )
-        })}
-      </Box>
-      <Box flexDirection="row" gap={1}>
-        <Button key="rj-save" label="保存して閉じる" variant="primary" onPress={() => safely($, () => saveDraft($))}>
-          保存して閉じる
+      {tab === 'room' ? roomRows($, parts, draft, art, mark) : clawdRows($, parts, draft, art, clawdNowCard, mark)}
+      <Box flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
+        <Button key="rj-scope" label={scopeLabel} onPress={pick({ scope: NEXT_SCOPE[draft.scope] })}>
+          {scopeLabel}
         </Button>
+        {tab === 'clawd' ? (
+          <Button key="rj-dots" label={dotsLabel} onPress={pick({ dots: NEXT_DOTS[draft.dots] })}>
+            {dotsLabel}
+          </Button>
+        ) : null}
         <Button key="rj-clear" label="保存先の設定を消す" onPress={() => safely($, () => clearDraftScope($))}>
           保存先の設定を消す
         </Button>
-        {inRoom ? (
-          <Button key="rj-off" label={off} onPress={pick({ theme: 'なし' })}>
-            {off}
-          </Button>
-        ) : null}
+        <Button key="rj-off" label={off.label} {...(off.variant ? { variant: off.variant } : {})} onPress={pick({ theme: 'なし' })}>
+          {off.label}
+        </Button>
+        <Box flexGrow={1} />
+        <Button key="rj-save" label="保存して閉じる" variant="primary" onPress={() => safely($, () => saveDraft($))}>
+          保存して閉じる
+        </Button>
       </Box>
-      {inRoom ? <Text dimColor>{APPEARANCE_HINT}</Text> : null}
     </Box>
   )
 }
@@ -1209,11 +1224,9 @@ export const register: Register = on => {
       clawdTrouble($, 'start', err)
     }
     // A look left showing by an earlier load is not shown in this one.
-    // タブの動きの印も消す（前の読み込みの時計はもう無いので、残すと描き直しのたびに動き直す）。
     isPreviewing = false
-    stopTabMove()
     await safely($, async () => {
-      await updateCard($, was => ({ ...was, previewing: false, tabMoving: false }))
+      await updateCard($, was => ({ ...was, previewing: false }))
     })
     await safely($, async () => {
       await follow($, true)
@@ -1221,19 +1234,17 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // セッションが終わったら、クロードくんの時計とタブの動きの時計を止める。
+  // セッションが終わったら、クロードくんの時計を止める。
   // /clear と resume は、同じ窓（同じ読み込み）で別の会話として続き、session.start は来ない：クロードくんを待つに
-  // 戻して数え直し（待っている書き込みは捨てずに重ねる）、モデルの見張りは続ける。タブの動きの印は、すぐ消す（止まった絵）。
+  // 戻して数え直し（待っている書き込みは捨てずに重ねる）、モデルの見張りは続ける。
   on('session.end', async ($, e, next) => {
     const goesOn = e.reason === 'clear' || e.reason === 'resume'
     // 時計は止められなくても続ける（next を飛ばさない）。
     cancelQuietly(tickTimer)
     tickTimer = undefined
     machine = undefined
-    stopTabMove()
     if (goesOn) {
       soon($, e.reason, () => resetClawd($, false))
-      soon($, 'tab', () => endTabMove($))
     } else {
       cancelQuietly(pendingPublish?.timer)
       pendingPublish = undefined
@@ -1317,7 +1328,8 @@ export const register: Register = on => {
 
   on('command.run', { command: COMMAND }, async ($, e) => {
     try {
-      return { text: await runCommand($, e.args) }
+      const text = await runCommand($, e.args)
+      return text === undefined ? {} : { text }
     } catch (error) {
       return { text: `うまくいきませんでした（${messageOf(error)}）。設定は変えていません。` }
     }
@@ -1344,10 +1356,10 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     const now = await read($, card)
     if (!now.isOpen) return next(e)
-    // Svg（タブの上の吹き出し・タブの下の帯・見た目のタブの小さな絵）は、デスクトップとスマホだけ。ターミナルは ✓ と線の文字とボタン。
-    const art = e.surface === 'desktop' || e.surface === 'mobile' ? { Svg: $.ui.resolve(e).Svg, width: ART_WIDTH[e.surface] } : undefined
-    // クロードくんの atom を読むのは見た目のタブのときだけ（背景のタブは、クロードくんが動いても描き直さない）。
+    // Svg（部屋の絵・クロードくんの大きな絵）は、デスクトップとスマホだけ。ターミナルは文字とボタン（選んだものは ✓）。
+    const art = e.surface === 'desktop' || e.surface === 'mobile' ? { Svg: $.ui.resolve(e).Svg } : undefined
+    // クロードくんの atom を読むのはクロードくんのタブのときだけ（背景のタブは、クロードくんが動いても描き直さない）。
     const clawdCard = now.tab === 'clawd' ? await clawdCardNow($, now, art !== undefined) : undefined
-    return cardView($, $.ui.resolve(e), now, art, clawdCard)
+    return cardView($, $.ui.resolve(e), now, art, clawdCard, e.surface)
   })
 }

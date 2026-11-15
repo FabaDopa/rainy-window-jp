@@ -5,17 +5,20 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { CommandRunInput, On, PromptSubmitInput, ThemeSetArgs } from 'claude-code'
 
-import { TILE_H, TILE_W, clawdTiles, effectTileSvg, lookTileSvg } from '../hooks/clawd/tiles'
+import { effectTileSvg } from '../hooks/clawd/tiles'
+import { CLAWD_PICTURE_H, CLAWD_PICTURE_W, ROOM_TILE_H, ROOM_TILE_W } from '../hooks/register'
+import { roomTileSvg } from '../hooks/room-tile'
 import { roomColors } from '../hooks/lib/palette'
-import { TIP_H, TIP_TEXT, tabRuleText, tabStripSvg, tabTipSvg } from '../hooks/lib/tabs'
 import { bandOf, clockAngles, jstParts } from '../hooks/lib/time'
+import type { Band } from '../hooks/lib/time'
 
 type World = { sets: ThemeSetArgs[]; clears: number; toasts: string[]; places: number; store: Map<string, unknown>; logs: { text: string; to?: string }[] }
 
 function world(
   on: On,
   store: Record<string, unknown> = {},
-  where: { root?: string; repo?: string | null; gitIsFile?: boolean; canPlace?: boolean } = {},
+  // hostId：デスクトップアプリが渡す会話の id。null は「無い」（ターミナルなど。Claude Code の会話の id を使う）。
+  where: { root?: string; repo?: string | null; gitIsFile?: boolean; canPlace?: boolean; hostId?: string | null } = {},
 ): World {
   // The mod's store, in memory, in insertion order as the engine keeps it.
   const kept = new Map<string, unknown>(Object.entries(store).map(([k, v]) => [k, JSON.parse(JSON.stringify(v))]))
@@ -30,7 +33,7 @@ function world(
     return { value: undefined }
   })
   on('store.keys', () => ({ value: [...kept.keys()] }))
-  mock.env(on, { CLAUDE_CODE_HOST_SESSION_ID: 'S1' })
+  mock.env(on, where.hostId === null ? {} : { CLAUDE_CODE_HOST_SESSION_ID: where.hostId ?? 'S1' })
   on('command.register', () => ({ value: { command: 'rj' } }))
   on('session.root', () => ({ value: where.root ?? 'C:/work/a' }))
   on('session.repo', () => ({
@@ -73,6 +76,25 @@ const start = { cwd: 'C:/work/a', surface: 'desktop', isInteractive: true } as c
 // 入力欄の上の帯（カードはいつもここに出る）。
 const BAND = { hasSurvey: false, isCollapsed: false } as never
 const labelOf = (set: ThemeSetArgs | undefined) => set?.colors?.label
+type Finder = { find: (q: { key: string }) => Promise<{ props: Record<string, unknown> } | undefined> }
+/** 選んでいるボタン（濃いボタン。デスクトップ・スマホでは ✓ は付けない）か。 */
+const isPicked = async (ui: Finder, key: string) => (await ui.find({ key }))?.props.variant === 'primary'
+/** 押すたびに切りかわるボタン（保存先・ドット）の、今の値。ラベルは「保存先：すべての会話 ▸」の形。 */
+const SHOWN: Record<string, Record<string, string>> = {
+  'rj-scope': { すべての会話: 'global', このフォルダ: 'project', この会話だけ: 'session' },
+  'rj-dots': { ふつう: 'normal', 細かい: 'fine' },
+}
+const valueOf = async (ui: Finder, key: string) => {
+  const label = String((await ui.find({ key }))?.props.label ?? '')
+  const word = /：(.+) ▸$/.exec(label)?.[1] ?? ''
+  return SHOWN[key]?.[word]
+}
+type Presser = Finder & { press: (q: { key: string }) => Promise<unknown> }
+/** 切りかわるボタンを、その値になるまで押す（多くても3回）。 */
+const pressUntil = async (ui: Presser, key: string, value: string) => {
+  for (let i = 0; i < 3 && (await valueOf(ui, key)) !== value; i++) await ui.press({ key })
+  expect(await valueOf(ui, key)).toBe(value)
+}
 
 
 test('何も保存していなければ、紺（元の rainy-window と同じ色と背景の名前）が付く', async ($, on) => {
@@ -175,7 +197,7 @@ test('カード：保存先に値が無ければ、いま効いているクロ�
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
-  await ui.press({ key: 'rj-scope-project' })
+  await pressUntil(ui, 'rj-scope', 'project')
   await ui.press({ key: 'rj-color-灰' })
   await ui.press({ key: 'rj-save' })
   expect(w.store.get('project:C:/work/a')).toEqual({ ...global, theme: '灰' })
@@ -247,8 +269,9 @@ for (const surface of ['desktop', 'terminal'] as const) {
   test(`カード（${surface}）：選んで「保存して閉じる」で保存し、カードを閉じる`, async ($, on) => {
     const w = world(on)
     await $.session.start(start)
+    // 開け閉めでは文を返さない（デスクトップは、返した文を「ここでは使用できないコマンド」に置きかえて出すので）
     const answer = await $.command.run(rj(''))
-    expect(answer.text).toContain('カード')
+    expect(answer.text).toBe(undefined)
     // 会話の中には置かない（入力欄の上に固定）
     expect(w.places).toBe(0)
     const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface, component: 'AbovePrompt', props: BAND })
@@ -259,7 +282,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
     expect((await ui.find({ type: 'Text', text: /保存してある設定：/ }))?.text).toContain('まだ保存していません')
     await ui.press({ key: 'rj-time-自動' })
-    await ui.press({ key: 'rj-scope-project' })
+    await pressUntil(ui, 'rj-scope', 'project')
     expect([...w.store.keys()]).toEqual([])
     await ui.press({ key: 'rj-save' })
     expect(w.store.get('project:C:/work/a')).toEqual({ theme: '緑', time: { kind: 'auto' }, brightness: 'system', clawd: { look: 'auto', effect: 'auto', dots: 'normal' } })
@@ -270,27 +293,30 @@ for (const surface of ['desktop', 'terminal'] as const) {
   })
 }
 
-test('カード：押した項目に ✓ が移る', async ($, on) => {
+test('カード：押した項目が濃いボタンになる（デスクトップでは ✓ は付けない）', async ($, on) => {
   world(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
-  expect((await ui.find({ key: 'rj-color-紺' }))?.props.label).toBe('🟦 紺 ✓')
-  expect((await ui.find({ key: 'rj-time-夜' }))?.props.label).toBe('夜 ✓')
+  expect((await ui.find({ key: 'rj-color-紺' }))?.props.label).toBe('紺')
+  expect(await isPicked(ui, 'rj-color-紺')).toBe(true)
+  expect(await isPicked(ui, 'rj-time-夜')).toBe(true)
   await ui.press({ key: 'rj-color-灰' })
-  expect((await ui.find({ key: 'rj-color-紺' }))?.props.label).toBe('🟦 紺')
-  expect((await ui.find({ key: 'rj-color-灰' }))?.props.label).toBe('⬜ 灰 ✓')
-  // 時間帯は1つの行：自動を押すと、夜の ✓ が自動へ移る
+  expect(await isPicked(ui, 'rj-color-紺')).toBe(false)
+  expect(await isPicked(ui, 'rj-color-灰')).toBe(true)
+  // 時間帯は1つの行：自動を押すと、夜の印が自動へ移る
   await ui.press({ key: 'rj-time-自動' })
-  const auto = (await ui.find({ key: 'rj-time-自動' }))?.props.label as string | undefined
-  // 自動のボタンには、いまの時間帯が出る（例：自動（いま夕方） ✓）
-  expect(/^自動（いま(朝|昼|夕方|夜)） ✓$/.test(String(auto))).toBe(true)
-  expect((await ui.find({ key: 'rj-time-夜' }))?.props.label).toBe('夜')
-  // 明るさの行は無い。行は 背景色・時間帯・保存先 の3つだけ
+  // 自動のボタンには、いまの時間帯が出る（例：自動（いま夕方））
+  expect(/^自動（いま(朝|昼|夕方|夜)）$/.test(String((await ui.find({ key: 'rj-time-自動' }))?.props.label))).toBe(true)
+  expect(await isPicked(ui, 'rj-time-自動')).toBe(true)
+  expect(await isPicked(ui, 'rj-time-夜')).toBe(false)
+  // 明るさの行は無い
   expect(await ui.find({ key: 'rj-bright-dark' })).toBe(undefined)
-  for (const key of ['rj-color-緑', 'rj-color-桜', 'rj-color-橙', 'rj-off', 'rj-time-朝', 'rj-time-昼', 'rj-time-夕方', 'rj-scope-global', 'rj-scope-project', 'rj-scope-session', 'rj-save', 'rj-clear', 'rj-close']) {
+  for (const key of ['rj-color-緑', 'rj-color-桜', 'rj-color-橙', 'rj-off', 'rj-time-朝', 'rj-time-昼', 'rj-time-夕方', 'rj-save', 'rj-clear', 'rj-close']) {
     expect((await ui.find({ key }))?.props.label === undefined).toBe(false)
   }
+  // 保存先は選ぶ欄
+  expect(await valueOf(ui, 'rj-scope')).toBe('global')
   await ui.unmount()
 })
 
@@ -319,7 +345,7 @@ test('カード：テンポよく押すと、そのたびに見た目が変わ�
   await ui.press({ key: 'rj-time-朝' })
   expect(w.sets.length).toBe(before + 1)
   // 効かせる場所だけを変えても、見た目は同じなので付け直さない
-  await ui.press({ key: 'rj-scope-session' })
+  await pressUntil(ui, 'rj-scope', 'session')
   expect(w.sets.length).toBe(before + 1)
   expect([...w.store.keys()]).toEqual([])
   await ui.press({ key: 'rj-close' })
@@ -438,7 +464,7 @@ test('/rj をもう一度打つとカードが閉じ、試していた見た目�
   await band.press({ key: 'rj-color-緑' })
   expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
   const answer = await $.command.run(rj(''))
-  expect(answer.text).toContain('閉じました')
+  expect(answer.text).toBe(undefined)
   expect(await band.find({ type: 'Text', text: /保存してある設定：/ })).toBe(undefined)
   expect(labelOf(w.sets.at(-1))).toBe('Rainy window')
   await band.unmount()
@@ -458,27 +484,34 @@ test('アンケートが帯を使っているあいだは、カードを出さ�
   await band.unmount()
 })
 
-test('カード：色の印・やさしい言葉・オフは下の列・明るさの案内', async ($, on) => {
+test('カード：色の名前（絵文字なし）・保存先は切りかわるボタン・背景を使わないは下の列・明るさの道順', async ($, on) => {
   world(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
   const label = async (key: string) => (await ui.find({ key }))?.props.label
-  expect(await label('rj-color-緑')).toBe('🟩 緑')
-  expect(await label('rj-color-桜')).toBe('🌸 桜')
-  expect(await label('rj-color-橙')).toBe('🟧 橙')
-  expect(await label('rj-scope-global')).toBe('すべての会話 ✓')
-  expect(await label('rj-scope-project')).toBe('このフォルダ')
-  expect(await label('rj-scope-session')).toBe('この会話だけ')
+  expect(await label('rj-color-緑')).toBe('緑')
+  expect(await label('rj-color-桜')).toBe('桜')
+  expect(await label('rj-color-橙')).toBe('橙')
+  // 保存先は、押すたびに すべての会話 → このフォルダ → この会話だけ → すべての会話 と切りかわるボタン（まだ保存はしない）
+  expect(await label('rj-scope')).toBe('保存先：すべての会話 ▸')
+  await ui.press({ key: 'rj-scope' })
+  expect(await label('rj-scope')).toBe('保存先：このフォルダ ▸')
+  await ui.press({ key: 'rj-scope' })
+  expect(await label('rj-scope')).toBe('保存先：この会話だけ ▸')
+  await ui.press({ key: 'rj-scope' })
+  expect(await label('rj-scope')).toBe('保存先：すべての会話 ▸')
+  // 選ぶ欄（Select）は使わない（本物のアプリで、選ぶ欄の入ったカードが出なかったため）
+  expect((await ui.findAll({ type: 'Select' })).length).toBe(0)
   expect(await label('rj-save')).toBe('保存して閉じる')
-  expect(await label('rj-off')).toBe('オフにする')
+  expect(await label('rj-off')).toBe('背景を使わない')
   // オフは色の列には無い
   expect(await ui.find({ key: 'rj-color-オフ' })).toBe(undefined)
-  // 明るさ（アプリの外観）の案内
-  const hint = (await ui.find({ type: 'Text', text: /外観/ }))?.text
-  expect(String(hint)).toContain('設定 → 外観 → テーマ')
+  // 部屋が昼か夜かは、アプリの設定で決まる：その道順
+  expect((await ui.find({ type: 'Text', text: /「設定」→「外観」→「テーマ」/ }))?.text).toBe('「設定」→「外観」→「テーマ」')
+  expect(String((await ui.find({ type: 'Text', text: /部屋が昼/ }))?.text)).toContain('Claude アプリの')
   await ui.press({ key: 'rj-off' })
-  expect(await label('rj-off')).toBe('オフにする ✓')
+  expect(await isPicked(ui, 'rj-off')).toBe(true)
   await ui.unmount()
 })
 test('Windows：セッションは c:\…、git は C:/… と答えても、ワークツリーは元のプロジェクトの設定を読む', async ($, on) => {
@@ -510,6 +543,8 @@ test('mod の実行環境でも、日本時間・時間帯・針の角度が正�
 
 test('部屋の絵：続けて描くよう頼まれても同じ絵を返し（雨を止めない）、時計は今の日本時間', async ($, on) => {
   world(on)
+  const hourAt = (d: Date) => Math.round(clockAngles(d).hourDeg * 100) / 100
+  const hourBefore = hourAt(new Date())
   await $.session.start(start)
   const target = { plugin: 'rainy-window-jp', surface: 'desktop', component: 'Backdrop', props: { plugin: 'rainy-window-jp', scene: 'rainy-window-jp' } } as const
   const first = await $.ui.mount(target as never)
@@ -520,9 +555,9 @@ test('部屋の絵：続けて描くよう頼まれても同じ絵を返し（�
   await second.unmount()
   expect(typeof a).toBe('string')
   expect(b).toBe(a)
-  const hour = Math.round(clockAngles(new Date()).hourDeg * 100) / 100
-  // 短針の角度は12分ごとにしか変わらないので、テストの間に変わることはほぼない
-  expect(String(a).includes(`<g transform="translate(-380 178) rotate(${hour})">`)).toBe(true)
+  // 短針の角度は1分ごとに 0.5 度進む。絵を作る前とあとの時刻のどちらかと合えばよい（テストの間に分が変わっても落ちない）
+  const hours = [hourBefore, hourAt(new Date())]
+  expect(hours.some(hour => String(a).includes(`<g transform="translate(-380 178) rotate(${hour})">`))).toBe(true)
 })
 
 test('言葉：返事に古い言葉（セッション・プロジェクト・場所）を使わない', async ($, on) => {
@@ -544,7 +579,7 @@ test('言葉：返事に古い言葉（セッション・プロジェクト・�
   expect(replies[0]).toContain('優先されている')
 })
 
-test('カード：状態の行は「保存してある設定」と「表示中」を分けて書く', async ($, on) => {
+test('カード：状態の行は「保存してある設定」と、まだ保存していないことを書く', async ($, on) => {
   world(on)
   await $.session.start(start)
   await $.command.run(rj(''))
@@ -553,7 +588,8 @@ test('カード：状態の行は「保存してある設定」と「表示中�
   expect(await status()).toContain('保存してある設定：紺・夜（標準）')
   expect((await status()).includes('いま：')).toBe(false)
   await ui.press({ key: 'rj-color-緑' })
-  expect(await status()).toContain('表示中：緑・夜（まだ保存していません）')
+  expect(await status()).toContain('まだ保存していません')
+  expect(await status()).toContain('保存してある設定：紺・夜（標準）')
   await ui.unmount()
 })
 
@@ -567,8 +603,8 @@ test('カードを開いたまま /rj 緑 と打つと、カードも緑に合�
   const status = String((await ui.find({ type: 'Text', text: /保存してある設定：/ }))?.text)
   expect(status).toContain('保存してある設定：緑・夜（すべての会話）')
   expect(status.includes('まだ保存していません')).toBe(false)
-  expect((await ui.find({ key: 'rj-color-緑' }))?.props.label).toBe('🟩 緑 ✓')
-  expect((await ui.find({ key: 'rj-color-桜' }))?.props.label).toBe('🌸 桜')
+  expect(await isPicked(ui, 'rj-color-緑')).toBe(true)
+  expect(await isPicked(ui, 'rj-color-桜')).toBe(false)
   await ui.press({ key: 'rj-save' })
   expect(w.store.get('global')).toEqual({ theme: '緑', time: { kind: 'fixed', band: '夜' }, brightness: 'system', clawd: { look: 'auto', effect: 'auto', dots: 'normal' } })
   expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
@@ -583,7 +619,7 @@ test('カードを開いたまま /rj reset と打っても、カードを新し
   const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
   await $.command.run(rj('reset'))
   expect(String((await ui.find({ type: 'Text', text: /保存してある設定：/ }))?.text)).toContain('紺・夜（標準）')
-  expect((await ui.find({ key: 'rj-color-紺' }))?.props.label).toBe('🟦 紺 ✓')
+  expect(await isPicked(ui, 'rj-color-紺')).toBe(true)
   await ui.unmount()
 })
 
@@ -596,15 +632,15 @@ test('カード：「保存先の設定を消す」は、選んだ保存先だ�
   await $.command.run(rj(''))
   const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
   // 開いたときの保存先は、いま効いている保存先（このフォルダ）
-  expect((await ui.find({ key: 'rj-scope-project' }))?.props.label).toBe('このフォルダ ✓')
+  expect(await valueOf(ui, 'rj-scope')).toBe('project')
   await ui.press({ key: 'rj-clear' })
   expect(w.store.get('project:C:/work/a')).toBe(undefined)
   expect(w.store.get('global')).toEqual(green)
   expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
   expect(String((await ui.find({ type: 'Text', text: /保存してある設定：/ }))?.text)).toContain('緑・夜（すべての会話）')
-  expect((await ui.find({ key: 'rj-color-緑' }))?.props.label).toBe('🟩 緑 ✓')
+  expect(await isPicked(ui, 'rj-color-緑')).toBe(true)
   // 保存先の選択はそのまま
-  expect((await ui.find({ key: 'rj-scope-project' }))?.props.label).toBe('このフォルダ ✓')
+  expect(await valueOf(ui, 'rj-scope')).toBe('project')
   await ui.unmount()
 })
 
@@ -674,9 +710,8 @@ test('クロードくんの atom の書き込みは、最後の書き込みか�
 
 test('Backdrop：クロードくんの atom が読めなくても、部屋は描く（1枚）', async ($, on) => {
   world(on)
-  on('state.get', () => {
-    throw new Error('read failed')
-  })
+  // 投げた例外ではテストの道具が下（本物の state）へ進んで読めてしまうので、断る（deny）ことで読み込みを失敗させる
+  on('state.get', () => ({ deny: 'read failed' }) as never)
   await $.session.start(start)
   const ui = await $.ui.mount(BACKDROP as never)
   const all = await ui.findAll({ type: 'Svg' })
@@ -1227,10 +1262,12 @@ test('turn.step：上が途中でやめると（return）下の流れも閉じ�
   expect((await failing.next()).done).toBe(true)
 })
 
-// ---- Task 9：カードの2つのタブ（🎨 背景・🐾 クロードくんの見た目）と、切りかわりのアニメーション ----
+// ---- カードの2つのタブ（背景・クロードくん）。背景のタブは部屋の絵の下にボタン、クロードくんのタブは左に大きな絵1枚 ----
 
 const TAB_ROOM = 'rj-tab-room'
 const TAB_CLAWD = 'rj-tab-clawd'
+/** 背景のタブの部屋の絵（5色。時間帯は、いま選んでいるもの）。 */
+const roomTiles = (band: Band) => (['紺', '緑', '桜', '橙', '灰'] as const).map(c => roomTileSvg(roomColors(c, band), ROOM_TILE_W, ROOM_TILE_H))
 const cardOn = (surface: 'desktop' | 'terminal' | 'mobile') => ({ plugin: 'rainy-window-jp', surface, component: 'AbovePrompt', props: BAND }) as const
 
 /** カードの atom に書いた値を、書いた順に集める。 */
@@ -1261,7 +1298,7 @@ function groupsAt(svg: string, open: string): string[] {
   return out
 }
 
-test('タブ（desktop）：開くと背景のタブ（上の吹き出しと下の帯は止まった絵）。見た目のタブを押すと、吹き出しと帯がばねで動き、小さな見本（今の様子）が出る。ほかのボタンでは動き直さない', async ($, on) => {
+test('タブ（desktop）：タブはボタンだけ。背景のタブは部屋の絵5枚、クロードくんのタブは、いま選んでいる姿と演出の大きな絵1枚', async ($, on) => {
   world(on)
   const cards = cardWrites(on)
   on('session.model', () => ({ value: 'claude-sonnet-4-5' }))
@@ -1270,116 +1307,60 @@ test('タブ（desktop）：開くと背景のタブ（上の吹き出しと下�
   await $.command.run(rj(''))
   const ui = await $.ui.mount(cardOn('desktop'))
   const sources = async () => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
-  // 開いたときは背景のタブ：選んだタブのボタンは primary で、ラベルは ✓ で終わる（ほかのボタンと同じ）
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room', tabFrom: 'room', tabMoving: false })
-  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景 ✓')
-  expect((await ui.find({ key: TAB_ROOM }))?.props.variant).toBe('primary')
-  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('🐾 クロードくんの見た目')
-  expect((await ui.find({ key: TAB_CLAWD }))?.props.variant).toBe(undefined)
-  // 背景のタブ：タブのボタンの上の吹き出しと、下の帯の2つ。開いたときは動かない（止まった絵）。背景の行があり、見た目の行は無い
-  expect(await sources()).toEqual([tabTipSvg('room', 'room', 600, false), tabStripSvg('room', 'room', 600, false)])
-  expect((await sources()).some(s => s.includes('<animate'))).toBe(false)
-  expect((await ui.findAll({ type: 'Svg' })).map(s => s.props.alt)).toEqual([TIP_TEXT.room, '選んでいるタブ：🎨 背景'])
-  expect((await ui.find({ key: 'rj-color-緑' }))?.props.label).toBe('🟩 緑')
+  // 開いたときは背景のタブ：選んだタブのボタンは濃いボタン（✓ は付けない）。動きの印は持たない
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room' })
+  expect(Object.keys(cards.at(-1) ?? {}).some(k => k === 'tabFrom' || k === 'tabMoving')).toBe(false)
+  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('背景')
+  expect(await isPicked(ui, TAB_ROOM)).toBe(true)
+  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('クロードくん')
+  expect(await isPicked(ui, TAB_CLAWD)).toBe(false)
+  // 背景のタブ：部屋の絵が5枚（暗い画面と明るい画面を1枚に。時間帯は、いま選んでいる夜）。クロードくんの行は無い
+  expect(await sources()).toEqual(roomTiles('夜'))
+  expect((await sources()).every(s => !s.includes('<animate'))).toBe(true)
+  expect((await ui.find({ key: 'rj-color-緑' }))?.props.label).toBe('緑')
   expect(await ui.find({ key: 'rj-look-opus' })).toBe(undefined)
   await ui.press({ key: TAB_CLAWD })
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd', tabFrom: 'room', tabMoving: true })
-  expect((await ui.find({ key: TAB_CLAWD }))?.props.variant).toBe('primary')
-  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('🐾 クロードくんの見た目 ✓')
-  expect((await ui.find({ key: TAB_ROOM }))?.props.variant).toBe(undefined)
-  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景')
-  // 見た目のタブ：吹き出しと帯（背景 → 見た目へ、ばねで動く）と、小さな止まった絵（姿 5つ・演出 6つ）。大きな動く見本も、タブの名前の帯も無い
-  const svgs = await sources()
-  expect(svgs.length).toBe(13)
-  expect(svgs[0]).toBe(tabTipSvg('room', 'clawd', 600, true))
-  expect(svgs[1]).toBe(tabStripSvg('room', 'clawd', 600, true))
-  expect(svgs[0]?.includes('<animate')).toBe(true)
-  expect(svgs[1]?.includes('<animate')).toBe(true)
-  expect((await ui.findAll({ type: 'Svg' }))[0]?.props.alt).toBe(TIP_TEXT.clawd)
-  // 絵は、今のモデルの姿（自動＝Sonnet）・今の effort（分からない＝なし）・カードで選んでいるドット・今の部屋の色で描く
-  const tiles = clawdTiles({ autoLook: 'sonnet', look: 'sonnet', autoLevel: 0, dots: 'normal', room: roomColors('紺', '夜') })
-  expect(svgs.slice(2)).toEqual([...Object.values(tiles.looks), ...Object.values(tiles.effects)])
-  // 背景の行は無く、見た目の行と、両方のタブで共通の保存先・ボタンがある
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd' })
+  expect(await isPicked(ui, TAB_CLAWD)).toBe(true)
+  expect(await isPicked(ui, TAB_ROOM)).toBe(false)
+  // クロードくんのタブ：大きな絵1枚。今のモデルの姿（自動＝Sonnet）が書いているところ、今の effort（分からない＝演出なし）
+  expect(await sources()).toEqual([effectTileSvg('sonnet', 0, 'normal', roomColors('紺', '夜'))])
+  // 背景の行は無く、クロードくんの行と、両方のタブで共通の下の行がある
   expect(await ui.find({ key: 'rj-color-緑' })).toBe(undefined)
   expect(await ui.find({ key: 'rj-time-朝' })).toBe(undefined)
-  for (const key of ['rj-look-auto', 'rj-look-sonnet', 'rj-look-haiku', 'rj-look-opus', 'rj-look-fable', 'rj-effect-auto', 'rj-effect-none', 'rj-effect-medium', 'rj-effect-high', 'rj-effect-xhigh', 'rj-effect-max', 'rj-dots-normal', 'rj-dots-fine', 'rj-scope-global', 'rj-scope-project', 'rj-scope-session', 'rj-save', 'rj-clear', 'rj-close']) {
+  for (const key of ['rj-look-auto', 'rj-look-sonnet', 'rj-look-haiku', 'rj-look-opus', 'rj-look-fable', 'rj-effect-auto', 'rj-effect-low', 'rj-effect-medium', 'rj-effect-high', 'rj-effect-xhigh', 'rj-effect-max', 'rj-save', 'rj-clear', 'rj-close']) {
     expect((await ui.find({ key }))?.props.label === undefined).toBe(false)
   }
   expect((await ui.find({ key: 'rj-look-sonnet' }))?.props.label).toBe('Sonnet')
-  expect((await ui.find({ key: 'rj-effect-none' }))?.props.label).toBe('なし')
-  expect((await ui.find({ key: 'rj-dots-normal' }))?.props.label).toBe('ふつう ✓')
-  expect((await ui.find({ key: 'rj-dots-fine' }))?.props.label).toBe('細かい')
-  // ほかのボタンを押しても、吹き出しと帯の source は同じ（動き直さない）。姿の絵もそのまま、演出の絵は押した姿になる
+  expect((await ui.find({ key: 'rj-effect-low' }))?.props.label).toBe('low')
+  expect(String((await ui.find({ type: 'Text', text: /low は/ }))?.text)).toContain('演出は出ません')
+  // ドットと保存先は、押すたびに切りかわるボタン
+  expect((await ui.find({ key: 'rj-dots' }))?.props.label).toBe('ドット：ふつう ▸')
+  expect(await valueOf(ui, 'rj-dots')).toBe('normal')
+  expect(await valueOf(ui, 'rj-scope')).toBe('global')
+  // 姿を押すと、大きな絵がその姿（Opus の譜面台）になる
   await ui.press({ key: 'rj-look-opus' })
-  await ui.press({ key: 'rj-scope-project' })
-  const after = await sources()
-  expect(after[0]).toBe(svgs[0])
-  expect(after[1]).toBe(svgs[1])
-  expect(after.slice(2, 7)).toEqual(svgs.slice(2, 7))
-  expect(after.slice(7).every(s => s.includes('#3A3340'))).toBe(true)
+  await pressUntil(ui, 'rj-scope', 'project')
+  expect(await sources()).toEqual([effectTileSvg('opus', 0, 'normal', roomColors('紺', '夜'))])
   // 同じタブをもう一度押しても何も変えない
   const count = cards.length
   await ui.press({ key: TAB_CLAWD })
   expect(cards.length).toBe(count)
-  expect((await sources())[0]).toBe(svgs[0])
-  // 背景のタブに戻ると、吹き出しと帯は見た目 → 背景へ動く。選んだものはそのまま
+  // 背景のタブに戻ると、また部屋の絵5枚。選んだものはそのまま
   await ui.press({ key: TAB_ROOM })
-  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabFrom: 'clawd', tabMoving: true })
-  expect(await sources()).toEqual([tabTipSvg('clawd', 'room', 600, true), tabStripSvg('clawd', 'room', 600, true)])
-  expect((await ui.find({ key: 'rj-scope-project' }))?.props.label).toBe('このフォルダ ✓')
+  expect(cards.at(-1)).toMatchObject({ tab: 'room' })
+  expect(await sources()).toEqual(roomTiles('夜'))
+  expect(await valueOf(ui, 'rj-scope')).toBe('project')
   await ui.press({ key: TAB_CLAWD })
-  expect((await ui.find({ key: 'rj-look-opus' }))?.props.label).toBe('Opus ✓')
+  expect(await isPicked(ui, 'rj-look-opus')).toBe(true)
   await ui.unmount()
-  // 閉じて開き直すと、また背景のタブから（動かない）
+  // 閉じて開き直すと、また背景のタブから
   await $.command.run(rj(''))
   await $.command.run(rj(''))
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room', tabFrom: 'room', tabMoving: false })
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room' })
 })
 
-test('タブの動き：押してから 1 秒だけ動く絵、そのあとは止まった絵（印はカードの atom）。1 秒のうちに切りかえ直すと、そこから動き直す（前の時計は取り消す）', async ($, on) => {
-  world(on)
-  const cards = cardWrites(on)
-  const clock = mock.clock(on)
-  await $.session.start(start)
-  await $.command.run(rj(''))
-  const ui = await $.ui.mount(cardOn('desktop'))
-  const strips = async () => (await ui.findAll({ type: 'Svg' })).slice(0, 2).map(s => String(s.props.source))
-  const moving = (from: 'room' | 'clawd', to: 'room' | 'clawd') => [tabTipSvg(from, to, 600, true), tabStripSvg(from, to, 600, true)]
-  const still = (to: 'room' | 'clawd') => [tabTipSvg(to, to, 600, false), tabStripSvg(to, to, 600, false)]
-  // 開いたときは動かない
-  expect(await strips()).toEqual(still('room'))
-  await ui.press({ key: TAB_CLAWD })
-  expect(await strips()).toEqual(moving('room', 'clawd'))
-  await clock.advance(999)
-  expect(await strips()).toEqual(moving('room', 'clawd'))
-  await clock.advance(1)
-  // 押してから 1 秒：印が消えて、止まった絵（見た目のタブの形）。カードの描き直しで、出だしの動きがくり返されない
-  expect(cards.at(-1)).toMatchObject({ tab: 'clawd', tabFrom: 'room', tabMoving: false })
-  expect(await strips()).toEqual(still('clawd'))
-  expect((await strips()).some(s => s.includes('<animate'))).toBe(false)
-  expect(tabTipSvg('room', 'clawd', 600, false)).toBe(still('clawd')[0])
-  // ほかのボタンを押しても、止まったまま
-  await ui.press({ key: 'rj-look-opus' })
-  expect(await strips()).toEqual(still('clawd'))
-  // 背景へ切りかえて、1 秒のうちに（0.6 秒で）見た目へ切りかえ直す：そこから動き直し、前の時計は取り消す
-  const before = cards.length
-  await ui.press({ key: TAB_ROOM })
-  expect(await strips()).toEqual(moving('clawd', 'room'))
-  await clock.advance(600)
-  await ui.press({ key: TAB_CLAWD })
-  expect(await strips()).toEqual(moving('room', 'clawd'))
-  await clock.advance(600) // 背景を押してから 1.2 秒：その時計は取り消したので、まだ動く絵
-  expect(await strips()).toEqual(moving('room', 'clawd'))
-  await clock.advance(400) // 見た目を押し直してから 1 秒
-  expect(await strips()).toEqual(still('clawd'))
-  // 印を消す書き込みは1回だけ（取り消した時計は書かない）
-  expect(cards.slice(before).map(c => c.tabMoving)).toEqual([true, true, false])
-  await clock.advance(5000)
-  expect(cards.slice(before).map(c => c.tabMoving)).toEqual([true, true, false])
-  await ui.unmount()
-})
-
-test('タブの動き：session.end で時計を止める（/clear・resume では、すぐ止まった絵に戻す）。次の session.start でも印は消える', async ($, on) => {
+test('タブ：タブを押しても時計は使わず、あとからカードに書かない（約1秒後に止まった絵へ戻す動きは無い）', async ($, on) => {
   world(on)
   const cards = cardWrites(on)
   const clock = mock.clock(on)
@@ -1387,67 +1368,57 @@ test('タブの動き：session.end で時計を止める（/clear・resume で�
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount(cardOn('desktop'))
-  // 会話が終わる：時計は止める（あとで書かない）
   await ui.press({ key: TAB_CLAWD })
-  expect(cards.at(-1)).toMatchObject({ tabMoving: true })
-  await $.session.end({ reason: 'other', sessionId: 'S1' } as never)
-  const ended = cards.length
-  await clock.advance(2000)
-  expect(cards.length).toBe(ended)
-  // 次の session.start で、印は消える（止まった絵）
-  await $.session.start(start)
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd', tabMoving: false })
-  expect((await ui.findAll({ type: 'Svg' })).slice(0, 2).map(s => String(s.props.source))).toEqual([tabTipSvg('clawd', 'clawd', 600, false), tabStripSvg('clawd', 'clawd', 600, false)])
-  // /clear：同じ窓で続くので、時計を止めて、すぐ止まった絵に戻す
-  await ui.press({ key: TAB_ROOM })
-  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabMoving: true })
+  const pressed = cards.length
+  await clock.advance(5000)
+  expect(cards.length).toBe(pressed)
+  // /clear で続いても、タブのためにカードへ書かない
   await $.session.end({ reason: 'clear', sessionId: 'S1', resume: { id: 'S1' } } as never)
   await clock.settle()
-  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabMoving: false })
-  const cleared = cards.length
   await clock.advance(2000)
-  expect(cards.length).toBe(cleared)
+  expect(cards.length).toBe(pressed)
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd' })
   await ui.unmount()
 })
 
-test('タブ（mobile）：吹き出し・帯は狭い横幅で、小さな絵はデスクトップと同じ大きさで描く', async ($, on) => {
+test('タブ（mobile）：絵はデスクトップと同じ大きさで描く', async ($, on) => {
   world(on)
   mock.clock(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount(cardOn('mobile'))
+  expect((await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))).toEqual(roomTiles('夜'))
   await ui.press({ key: TAB_CLAWD })
   const svgs = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
-  expect(svgs.length).toBe(13)
-  expect(svgs[0]).toBe(tabTipSvg('room', 'clawd', 320, true))
-  expect(svgs[1]).toBe(tabStripSvg('room', 'clawd', 320, true))
-  expect(svgs.slice(2).every(s => s.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"'))).toBe(true)
+  expect(svgs.length).toBe(1)
+  expect(svgs[0]).toBe(effectTileSvg('sonnet', 0, 'normal', roomColors('紺', '夜')))
   await ui.unmount()
 })
 
-test('タブ（terminal）：Svg は無く、選んだタブのボタンに ✓、下に ━ の線', async ($, on) => {
+test('タブ（terminal）：Svg は無く、選んだボタンは濃いボタンに ✓ も付ける（下の線の文字は無い）', async ($, on) => {
   world(on)
   mock.clock(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount(cardOn('terminal'))
   expect((await ui.findAll({ type: 'Svg' })).length).toBe(0)
-  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景 ✓')
-  expect((await ui.find({ key: TAB_ROOM }))?.props.variant).toBe('primary')
-  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('🐾 クロードくんの見た目')
-  expect((await ui.find({ type: 'Text', text: /━/ }))?.text).toBe(tabRuleText('room'))
+  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('背景 ✓')
+  expect(await isPicked(ui, TAB_ROOM)).toBe(true)
+  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('クロードくん')
+  expect((await ui.find({ key: 'rj-color-紺' }))?.props.label).toBe('紺 ✓')
+  expect(await ui.find({ type: 'Text', text: /[━─]/ })).toBe(undefined)
   await ui.press({ key: TAB_CLAWD })
   expect((await ui.findAll({ type: 'Svg' })).length).toBe(0)
-  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('🐾 クロードくんの見た目 ✓')
-  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景')
-  expect((await ui.find({ type: 'Text', text: /━/ }))?.text).toBe(tabRuleText('clawd'))
-  // 見た目の行はターミナルでも押せる
+  expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('クロードくん ✓')
+  expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('背景')
+  expect(await ui.find({ type: 'Text', text: /[━─]/ })).toBe(undefined)
+  // クロードくんの行はターミナルでも押せる
   await ui.press({ key: 'rj-look-opus' })
   expect((await ui.find({ key: 'rj-look-opus' }))?.props.label).toBe('Opus ✓')
   await ui.unmount()
 })
 
-test('見た目のタブ：姿・演出・ドットを押すと、保存せずにすぐ部屋のクロードくんが変わり（テーマは付け直さない）、「閉じる」で保存してある設定に戻る', async ($, on) => {
+test('クロードくんのタブ：姿・演出・ドットを押すと、保存せずにすぐ部屋のクロードくんが変わり（テーマは付け直さない）、「閉じる」で保存してある設定に戻る', async ($, on) => {
   const w = world(on)
   on('session.model', () => ({ value: 'claude-sonnet-4-5' }))
   mock.clock(on)
@@ -1459,7 +1430,7 @@ test('見た目のタブ：姿・演出・ドットを押すと、保存せず�
   const layerNow = async () => layerPart((await backdropNow($)).source)
   expect((await layerNow()).includes('#3A3340')).toBe(false)
   await ui.press({ key: 'rj-look-opus' })
-  expect((await ui.find({ key: 'rj-look-opus' }))?.props.label).toBe('Opus ✓')
+  expect(await isPicked(ui, 'rj-look-opus')).toBe(true)
   expect((await ui.find({ key: 'rj-look-auto' }))?.props.label).toBe('自動（いま Sonnet）')
   // 譜面台（Opus の姿）
   expect((await layerNow()).includes('#3A3340')).toBe(true)
@@ -1469,7 +1440,7 @@ test('見た目のタブ：姿・演出・ドットを押すと、保存せず�
   expect((await layerNow()).includes('#FF2D45')).toBe(true)
   // ドット 細かい：細かい点のマスク
   expect((await backdropNow($)).source.includes('id="fm0"')).toBe(false)
-  await ui.press({ key: 'rj-dots-fine' })
+  await pressUntil(ui, 'rj-dots', 'fine')
   expect((await backdropNow($)).source.includes('id="fm0"')).toBe(true)
   // 保存はしない。テーマも付け直さない
   expect(w.sets.length).toBe(sets)
@@ -1485,7 +1456,7 @@ test('見た目のタブ：姿・演出・ドットを押すと、保存せず�
   await ui.unmount()
 })
 
-test('保存：見た目のタブで演出 max、背景のタブで緑を選んで「保存して閉じる」→ 選んだ保存先に、背景とクロードくんをまとめて保存', async ($, on) => {
+test('保存：クロードくんのタブで演出 max、背景のタブで緑を選んで「保存して閉じる」→ 選んだ保存先に、背景とクロードくんをまとめて保存', async ($, on) => {
   const w = world(on)
   mock.clock(on)
   await $.session.start(start)
@@ -1507,7 +1478,7 @@ test('保存：見た目のタブで演出 max、背景のタブで緑を選ん�
   await $.command.run(rj(''))
   const again = await $.ui.mount(cardOn('desktop'))
   await again.press({ key: TAB_CLAWD })
-  expect((await again.find({ key: 'rj-effect-max' }))?.props.label).toBe('max ✓')
+  expect(await isPicked(again, 'rj-effect-max')).toBe(true)
   expect((await backdropNow($, 'rainy-window-jp-green-night')).source.includes('#FF2D45')).toBe(true)
   await again.unmount()
 })
@@ -1520,11 +1491,12 @@ test('保存：狭い保存先にも、カードで選んだクロードくん�
   const ui = await $.ui.mount(cardOn('desktop'))
   await ui.press({ key: TAB_CLAWD })
   // 開いたときは、いま効いている（このフォルダの）設定
-  expect((await ui.find({ key: 'rj-look-haiku' }))?.props.label).toBe('Haiku ✓')
+  expect(await isPicked(ui, 'rj-look-haiku')).toBe(true)
   await ui.press({ key: 'rj-look-fable' })
-  await ui.press({ key: 'rj-dots-fine' })
+  await pressUntil(ui, 'rj-dots', 'fine')
   await ui.press({ key: 'rj-save' })
-  expect(w.store.get('project:C:/work/a')).toEqual({ ...GREEN, clawd: { look: 'fable', effect: 'none', dots: 'fine' } })
+  // 前の版の「なし」（none）で保存されていた演出は、low として保存し直す
+  expect(w.store.get('project:C:/work/a')).toEqual({ ...GREEN, clawd: { look: 'fable', effect: 'low', dots: 'fine' } })
   expect(w.store.get('global')).toEqual({ ...GREEN, clawd: { look: 'opus', effect: 'max', dots: 'fine' } })
   // カードを閉じたあとすぐの部屋の絵も、保存した姿（Fable の黒板）と細かいドット（前の Haiku・ふつうに戻らない）
   const saved = (await backdropNow($, 'rainy-window-jp-green-night')).source
@@ -1544,16 +1516,17 @@ test('自動の表示：姿の「自動」には今のモデルの姿、演出�
   const ui = await $.ui.mount(cardOn('desktop'))
   await ui.press({ key: TAB_CLAWD })
   const label = async (key: string) => String((await ui.find({ key }))?.props.label)
-  expect(await label('rj-look-auto')).toBe('自動（いま Opus） ✓')
-  expect(await label('rj-effect-auto')).toBe('自動 ✓')
+  expect(await label('rj-look-auto')).toBe('自動（いま Opus）')
+  expect(await isPicked(ui, 'rj-look-auto')).toBe(true)
+  expect(await label('rj-effect-auto')).toBe('自動')
   await $.turn.start(MAIN)
   await readStep($.turn.step(stepOf({ effort: 'max', model: 'claude-opus-5-5' })))
   await clock.advance(2000)
-  expect(await label('rj-effect-auto')).toBe('自動（いま max） ✓')
-  // 姿を決めても、自動のボタンには今のモデルの姿が出たまま（✓ は決めた姿へ）
+  expect(await label('rj-effect-auto')).toBe('自動（いま max）')
+  // 姿を決めても、自動のボタンには今のモデルの姿が出たまま（濃いボタンは決めた姿へ）
   await ui.press({ key: 'rj-look-fable' })
   expect(await label('rj-look-auto')).toBe('自動（いま Opus）')
-  expect(await label('rj-look-fable')).toBe('Fable ✓')
+  expect(await isPicked(ui, 'rj-look-fable')).toBe(true)
   // 「自動＝…」の薄い行は無い（自動が今なにかは、ボタンの名前に書く）
   expect((await ui.findAll({ type: 'Text' })).some(t => String(t.text).startsWith('自動＝'))).toBe(false)
   await ui.unmount()
@@ -1577,14 +1550,14 @@ test('サブエージェントの子に演出は付かない：effort が max �
   expect(kid.every(g => !g.includes('#E8102E'))).toBe(true)
 })
 
-// ---- 変更 8：見た目のタブは、小さな止まった絵の一覧（大きな動く見本と、そのポンは無くなった） ----
+// ---- 変更 8 のあと：カードの絵は止まった絵（動く見本と、そのポンは無くなった）。今は背景のタブに部屋の絵5枚、クロードくんのタブに大きな絵1枚 ----
 
-/** 見た目のタブの Svg のうち、小さな絵（吹き出し・帯のあと）の source。 */
+/** 見た目のタブの Svg（小さな絵だけ）の source。 */
 async function tilesOf(ui: { findAll: (q: { type: string }) => Promise<{ props: Record<string, unknown> }[]> }): Promise<string[]> {
-  return (await ui.findAll({ type: 'Svg' })).slice(2).map(s => String(s.props.source))
+  return (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
 }
 
-test('見た目のタブの絵は止まった絵：animate が無い。Claude の状態が変わってカードが描き直されても、姿の絵は同じ文字列（演出の「自動」だけが今の effort に）', async ($, on) => {
+test('クロードくんのタブの絵は止まった絵：animate が無い。演出が「自動」なら、Claude の effort が分かったとき、その演出の絵になる', async ($, on) => {
   world(on)
   engineTurns(on)
   on('session.model', () => ({ value: 'claude-sonnet-4-5' }))
@@ -1595,92 +1568,80 @@ test('見た目のタブの絵は止まった絵：animate が無い。Claude �
   const ui = await $.ui.mount(cardOn('desktop'))
   await ui.press({ key: TAB_CLAWD })
   const first = await tilesOf(ui)
-  expect(first.length).toBe(11)
+  expect(first).toEqual([effectTileSvg('sonnet', 0, 'normal', roomColors('紺', '夜'))])
   expect(first.every(s => !s.includes('<animate') && !s.includes('<set'))).toBe(true)
-  // 大きな見本（横 240・縦 150）は無い
-  expect((await ui.findAll({ type: 'Svg' })).some(s => s.props.width === 240 || s.props.height === 150)).toBe(false)
   // 送った（！→ 考え中 → 書く）、effort は max：クロードくんの atom が変わり、カードが描き直される
   await $.turn.start(MAIN)
   await readStep($.turn.step(stepOf({ effort: 'max', model: 'claude-sonnet-4-5' })))
   await clock.advance(2000)
-  const busy = await tilesOf(ui)
-  expect(busy.slice(0, 5)).toEqual(first.slice(0, 5))
-  expect(busy[5]).toBe(effectTileSvg('sonnet', 4, 'normal', roomColors('紺', '夜')))
-  expect(busy[5]).not.toBe(first[5])
-  expect(busy.slice(6)).toEqual(first.slice(6))
-  // やった → 手をふる → 待つ：姿の絵は、ずっと同じ
-  await $.turn.complete(ended())
-  await clock.advance(10000)
-  expect((await tilesOf(ui)).slice(0, 5)).toEqual(first.slice(0, 5))
+  expect(await tilesOf(ui)).toEqual([effectTileSvg('sonnet', 4, 'normal', roomColors('紺', '夜'))])
   await ui.unmount()
 })
 
-test('見た目のタブ：絵の一つ一つの枠（Box）に key があり、11 枚ぜんぶ重ならない（描き直しで絵が作り直されない）', async ($, on) => {
+test('カードの絵の枠（Box）に key がある（描き直しで絵が作り直されない）：部屋の絵5枚は重ならない key、クロードくんの絵は rj-picture', async ($, on) => {
   world(on)
   on('session.model', () => ({ value: 'claude-sonnet-4-5' }))
   mock.clock(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount(cardOn('desktop'))
+  const keys = async () => (await ui.findAll({ type: 'Box' })).map(b => String(b.props.key ?? '')).filter(k => k.startsWith('rj-tile-') || k === 'rj-picture')
+  expect(await keys()).toEqual(['紺', '緑', '桜', '橙', '灰'].map(c => `rj-tile-color-${c}`))
   await ui.press({ key: TAB_CLAWD })
-  const keys = (await ui.findAll({ type: 'Box' })).map(b => String(b.props.key ?? '')).filter(k => k.startsWith('rj-tile-'))
-  expect(keys.length).toBe(11)
-  expect(new Set(keys).size).toBe(11)
+  expect(await keys()).toEqual(['rj-picture'])
   await ui.unmount()
 })
 
-test('見た目のタブ：絵の下にそのボタン。Opus を押すと演出の絵が Opus（譜面台）になり、部屋のクロードくんもすぐ譜面台に（テーマは付け直さない）。細かいドットは絵も細かい', async ($, on) => {
+test('背景のタブ：部屋の絵の下にそのボタン。時間帯を変えると絵もその時間帯に。クロードくんのタブ：Opus を押すと大きな絵が譜面台になり、部屋のクロードくんもすぐ譜面台に（テーマは付け直さない）。細かいドットは絵も細かい', async ($, on) => {
   const w = world(on)
   on('session.model', () => ({ value: 'claude-sonnet-4-5' }))
   mock.clock(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const ui = await $.ui.mount(cardOn('desktop'))
-  await ui.press({ key: TAB_CLAWD })
   const room = roomColors('紺', '夜')
-  const sets = w.sets.length
-  const before = await tilesOf(ui)
-  expect(before.slice(0, 5)).toEqual([lookTileSvg('sonnet', 'normal', room), ...(['sonnet', 'haiku', 'opus', 'fable'] as const).map(l => lookTileSvg(l, 'normal', room))])
-  expect(before.slice(5).some(s => s.includes('#3A3340'))).toBe(false)
-  // 絵の説明（alt）は、その絵のボタンと同じ名前
-  const alts = (await ui.findAll({ type: 'Svg' })).slice(2).map(s => String(s.props.alt))
-  expect(alts.slice(0, 5)).toEqual(['自動（いま Sonnet）', 'Sonnet', 'Haiku', 'Opus', 'Fable'].map(n => `クロードくんの絵：姿 ${n}`))
-  expect(alts.slice(5)).toEqual(['自動', 'なし', 'medium', 'high', 'xhigh', 'max'].map(n => `クロードくんの絵：Sonnet・演出 ${n}`))
-  // 1つずつ、縦の Box に「絵 → その絵のボタン」の順
+  // 1つずつ、縦の Box に「絵 → その絵のボタン」の順。絵の説明（alt）に、色と、左上・右下の意味
   type Drawn = { type?: string; key?: string; props?: Record<string, unknown>; children?: unknown[] }
-  const columns = ((await ui.findAll({ type: 'Box' })) as Drawn[]).filter(b => b.props?.flexDirection === 'column' && b.children?.length === 2)
+  const columns = ((await ui.findAll({ type: 'Box' })) as Drawn[]).filter(b => b.props?.flexDirection === 'column' && b.children?.length === 2 && (b.children[0] as Drawn)?.type === 'Svg')
   const pairs = columns.map(b => b.children as Drawn[]).map(([a, b]) => [a?.type, `${b?.type}:${b?.key ?? b?.props?.key}`])
-  const keys = ['auto', 'sonnet', 'haiku', 'opus', 'fable'].map(v => `rj-look-${v}`).concat(['auto', 'none', 'medium', 'high', 'xhigh', 'max'].map(v => `rj-effect-${v}`))
-  expect(pairs).toEqual(keys.map(k => ['Svg', `Button:${k}`]))
+  expect(pairs).toEqual(['紺', '緑', '桜', '橙', '灰'].map(c => ['Svg', `Button:rj-color-${c}`]))
+  const alts = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.alt))
+  expect(alts).toEqual(['紺', '緑', '桜', '橙', '灰'].map(c => `部屋の絵：${c}（左上は暗い画面、右下は明るい画面）`))
   // 絵とボタンは重ねない（位置の基準の Box・重ねる Box は無い）。ボタンに hover も付けない
   const boxes = (await ui.findAll({ type: 'Box' })) as Drawn[]
   expect(boxes.some(b => b.props?.position !== undefined)).toBe(false)
   const buttons = (await ui.findAll({ type: 'Button' })) as { hover?: unknown; props?: Record<string, unknown> }[]
   expect(buttons.some(b => b.hover !== undefined || b.props?.hover !== undefined)).toBe(false)
-  // ボタンは今までのまま（✓ は選んだもの）
-  expect((await ui.find({ key: 'rj-look-auto' }))?.props.label).toBe('自動（いま Sonnet） ✓')
-  expect((await ui.find({ key: 'rj-effect-auto' }))?.props.label).toBe('自動 ✓')
+  // 時間帯を朝にすると、部屋の絵も朝の部屋（テーマは付け直す：見た目が変わるので）
+  await ui.press({ key: 'rj-time-朝' })
+  expect((await tilesOf(ui))).toEqual(roomTiles('朝'))
+  await ui.press({ key: 'rj-time-夜' })
+  // クロードくんのタブ
+  await ui.press({ key: TAB_CLAWD })
+  const sets = w.sets.length
+  expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toBe('クロードくんの絵：Sonnet・演出 なし')
   await ui.press({ key: 'rj-look-opus' })
-  const after = await tilesOf(ui)
-  expect(after.slice(0, 5)).toEqual(before.slice(0, 5))
-  expect(after.slice(5)).toEqual([0, 0, 1, 2, 3, 4].map(l => effectTileSvg('opus', l as 0 | 1 | 2 | 3 | 4, 'normal', room)))
-  expect((await ui.find({ key: 'rj-look-opus' }))?.props.label).toBe('Opus ✓')
+  expect(await tilesOf(ui)).toEqual([effectTileSvg('opus', 0, 'normal', room)])
+  expect(await isPicked(ui, 'rj-look-opus')).toBe(true)
   expect(layerPart((await backdropNow($)).source).includes('#3A3340')).toBe(true)
+  await ui.press({ key: 'rj-effect-max' })
+  expect(await tilesOf(ui)).toEqual([effectTileSvg('opus', 4, 'normal', room)])
+  expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toBe('クロードくんの絵：Opus・演出 max')
   expect(w.sets.length).toBe(sets)
   // ドット 細かい：絵も細かいドット
-  await ui.press({ key: 'rj-dots-fine' })
+  await pressUntil(ui, 'rj-dots', 'fine')
   const fine = await tilesOf(ui)
-  expect(fine[0]).toBe(lookTileSvg('sonnet', 'fine', room))
+  expect(fine).toEqual([effectTileSvg('opus', 4, 'fine', room)])
   expect(fine.every(s => s.includes('id="fm0"') && !s.includes('id="c0"'))).toBe(true)
   expect(w.sets.length).toBe(sets)
   await ui.unmount()
 })
 
-test('カードの atom は card-5：前の版（card-4、タブの動きの印なし）で書かれた値は、閉じたカードとして読む', async ($, on) => {
+test('カードの atom は card-6：前の版（card-5、タブの動きの印 tabFrom・tabMoving あり）で書かれた値は、閉じたカードとして読む（壊れない）', async ($, on) => {
   world(on)
   mock.clock(on)
-  // 前の版が書いた値（card-4：開いたカード・見た目のタブ。動きの印は無い）が残っている。カードに1回書かれるまでは、それを読む
-  const OLD = { shape: 'card-4', value: { isOpen: true, inBand: true, draft: null, nowLine: '', previewing: false, tab: 'clawd', tabFrom: 'room' } }
+  // 前の版が書いた値（card-5：開いたカード・見た目のタブ・動いている印つき）が残っている。カードに1回書かれるまでは、それを読む
+  const OLD = { shape: 'card-5', value: { isOpen: true, inBand: true, draft: null, nowLine: '', previewing: false, tab: 'clawd', tabFrom: 'room', tabMoving: true } }
   let old = true
   on('state.get', async (_, e, next) => {
     const real = (await next(e)) as { value: { value?: unknown; version: number } }
@@ -1698,28 +1659,27 @@ test('カードの atom は card-5：前の版（card-4、タブの動きの印�
   // /rj でいつもどおり開く（背景のタブから）
   await $.command.run(rj(''))
   const again = await $.ui.mount(cardOn('desktop'))
-  expect((await again.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景 ✓')
-  expect((await again.findAll({ type: 'Svg' })).length).toBe(2)
+  expect(await isPicked(again, TAB_ROOM)).toBe(true)
+  expect((await again.findAll({ type: 'Svg' })).length).toBe(5)
   await again.unmount()
 })
 
-// ---- 最後のレビューの直し：カードの Svg が動く、子の数が戻らない ----
+// ---- 最後のレビューの直し：カードの Svg（動く枠にするのは、あとでやめた）、子の数が戻らない ----
 
-test('カードの Svg：吹き出し・帯・小さな絵のどれにも isInteractive は付けず（枠にするとスクロールが詰まる）、大きさを持つ。部屋の Svg は何も持たない', async ($, on) => {
+test('カードの Svg：絵には isInteractive は付けず（枠にするとスクロールが詰まる）、大きさを持つ。部屋の Svg は何も持たない', async ($, on) => {
   world(on)
   mock.clock(on)
   await $.session.start(start)
   await $.command.run(rj(''))
   const shape = (s: { props: Record<string, unknown> } | undefined) => [s?.props.isInteractive, s?.props.width, s?.props.height]
-  for (const [surface, width] of [['desktop', 600], ['mobile', 320]] as const) {
+  expect([ROOM_TILE_W, ROOM_TILE_H, CLAWD_PICTURE_W, CLAWD_PICTURE_H]).toEqual([104, 65, 200, 150])
+  for (const surface of ['desktop', 'mobile'] as const) {
     const ui = await $.ui.mount(cardOn(surface))
-    // 背景のタブ：吹き出し（横 W・縦 46）と帯（横 W・縦 10）
-    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, width, TIP_H], [undefined, width, 10]])
-    // 見た目のタブ：それと、小さな絵 11 枚（姿 5・演出 6。横 80・縦 60、isInteractive なし）。動いている間も isInteractive は付けない
+    // 背景のタブ：部屋の絵5枚（横 104・縦 65）
+    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual(Array.from({ length: 5 }, () => [undefined, ROOM_TILE_W, ROOM_TILE_H]))
+    // クロードくんのタブ：大きな絵1枚（横 200・縦 150）
     await ui.press({ key: TAB_CLAWD })
-    const tile = [undefined, TILE_W, TILE_H]
-    expect([TILE_W, TILE_H]).toEqual([80, 60])
-    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, width, TIP_H], [undefined, width, 10], ...Array.from({ length: 11 }, () => tile)])
+    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, CLAWD_PICTURE_W, CLAWD_PICTURE_H]])
     await ui.press({ key: TAB_ROOM })
     await ui.unmount()
   }
@@ -1766,4 +1726,254 @@ test('サブエージェントの数：子の turn が終わったのに一覧�
   await $.agent.spawn(SPAWN)
   await clock.settle()
   expect(writes.at(-1)).toMatchObject({ subagents: 2, arrive: [1], leave: [] })
+})
+
+// ---- カードの見た目（行の揃い・折り返し・行の間・明るさの道順） ----
+
+type Drawn = string | { type: string; props?: Record<string, unknown>; children?: Drawn[] }
+const textOf = (n: Drawn): string => (typeof n === 'string' ? n : (n.children ?? []).map(textOf).join(''))
+/** 見出しの文字（全角の空白は除く）で、見出しとボタンの行（横並びの Box）を探す。 */
+function rowWithHead(n: Drawn, head: string): Exclude<Drawn, string> | undefined {
+  if (typeof n === 'string') return undefined
+  const first = n.children?.[0]
+  if (n.type === 'Box' && n.props?.flexDirection === 'row' && first !== undefined && typeof first !== 'string') {
+    const t = first.type === 'Text' ? first : first.type === 'Box' && first.children?.length === 1 ? first.children[0] : undefined
+    if (t !== undefined && typeof t !== 'string' && t.type === 'Text' && textOf(t).replace(/　/g, '').trim() === head) return n
+  }
+  for (const c of n.children ?? []) {
+    const found = rowWithHead(c, head)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+/** 木の中で、key のボタンを持つ横並びの Box（ボタンの親）。 */
+function parentOf(n: Drawn, key: string): Exclude<Drawn, string> | undefined {
+  if (typeof n === 'string') return undefined
+  if ((n.children ?? []).some(c => typeof c !== 'string' && c.props?.key === key)) return n
+  for (const c of n.children ?? []) {
+    const found = parentOf(c, key)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+for (const surface of ['desktop', 'mobile', 'terminal'] as const) {
+  test(`カード（${surface}）：見出しとボタンの行は、見出しを縮めず、ボタンの真ん中に揃え、ボタンは狭い画面で見出しの右に折り返す。下の行（保存先・保存して閉じる…）も折り返す`, async ($, on) => {
+    world(on)
+    await $.session.start(start)
+    await $.command.run(rj(''))
+    const ui = await $.ui.mount(cardOn(surface))
+    const check = (tree: Drawn, head: string, firstKey: string, inner = false) => {
+      const row = rowWithHead(tree, head)
+      expect(row === undefined ? `${head} の行が無い` : 'ok').toBe('ok')
+      if (row === undefined) return
+      expect(`${head}:${String(row.props?.alignItems)}`).toBe(`${head}:center`)
+      const [headBox, right] = row.children ?? []
+      // 背景色の絵の組は、縦の箱（上に絵の組の並び、下に昼か夜かの道順）の上の段
+      const buttons = inner && typeof right !== 'string' && right?.props?.flexDirection === 'column' ? right.children?.[0] : right
+      // 見出しは縮まない箱の中（狭い画面で「背景／色」のように折れない）
+      expect(typeof headBox !== 'string' && headBox?.type === 'Box' && headBox.props?.flexShrink === 0).toBe(true)
+      // ボタン（絵の下にボタンのときは、絵とボタンの組）は、折り返す箱にまとめる（折り返しても見出しの下にもぐらない）
+      expect(typeof buttons !== 'string' && buttons?.type === 'Box' && buttons.props?.flexWrap === 'wrap').toBe(true)
+      const parent = parentOf(tree, firstKey)
+      expect(inner ? parent !== undefined && typeof buttons !== 'string' && (buttons?.children ?? []).includes(parent) : parent === buttons).toBe(true)
+    }
+    let tree = (await ui.drawn()) as Drawn
+    // 背景色の行：デスクトップ・スマホは、絵とボタンの組が折り返す（ボタンは組の中）
+    check(tree, '背景色', 'rj-color-紺', surface !== 'terminal')
+    check(tree, '時間帯', 'rj-time-自動')
+    expect(parentOf(tree, 'rj-save')?.props?.flexWrap).toBe('wrap')
+    expect(parentOf(tree, 'rj-scope')).toBe(parentOf(tree, 'rj-save'))
+    await ui.press({ key: TAB_CLAWD })
+    tree = (await ui.drawn()) as Drawn
+    check(tree, '姿', 'rj-look-auto')
+    check(tree, '演出', 'rj-effect-auto')
+    expect(parentOf(tree, 'rj-save')?.props?.flexWrap).toBe('wrap')
+    expect(parentOf(tree, 'rj-dots')).toBe(parentOf(tree, 'rj-save'))
+    await ui.unmount()
+  })
+}
+
+test('カード：行の間は小さく（xs）。窓が低いときも、帯の高さに収めるため', async ($, on) => {
+  world(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('desktop'))
+  for (const tab of [TAB_ROOM, TAB_CLAWD]) {
+    await ui.press({ key: tab })
+    const tree = (await ui.drawn()) as Drawn
+    expect(typeof tree !== 'string' && tree.props?.gap).toBe('xs')
+    // タブのボタンの行の下だけ、少し空ける（xs）
+    expect(parentOf(tree, TAB_ROOM)?.props?.marginBottom).toBe('xs')
+    // 下の行の上は、ほかの行と同じ（前は sm 空けていた）
+    expect(parentOf(tree, 'rj-save')?.props?.marginTop).toBe(undefined)
+  }
+  await ui.unmount()
+})
+
+test('カード：部屋が昼か夜かは、アプリの設定で決まる。その道順を、太字で、☀️ と 🌙 を1回ずつ（絵文字の形で）書く', async ($, on) => {
+  world(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('desktop'))
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => ({ text: String(t.text), bold: t.props.bold === true }))
+  const path = texts.find(t => t.text.includes('「設定」→「外観」→「テーマ」'))
+  expect(path).toEqual({ text: '「設定」→「外観」→「テーマ」', bold: true })
+  const all = texts.map(t => t.text).join('')
+  for (const icon of ['☀️', '🌙']) expect(`${icon}:${all.split(icon).length - 1}`).toBe(`${icon}:1`)
+  // 文字の形の ☀（後ろに U+FE0F が無いもの）は使わない
+  expect(/☀(?!️)/u.test(all)).toBe(false)
+  await ui.unmount()
+})
+
+test('カード：昼か夜かの道順は、枠なしの薄い字で、部屋の絵のすぐ下に置く（背景のタブを低くして、スクロールを出さない）', async ($, on) => {
+  world(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('desktop'))
+  const tree = (await ui.drawn()) as Drawn
+  const texts = await ui.findAll({ type: 'Text' })
+  const pathText = texts.find(t => String(t.text).includes('「設定」→「外観」→「テーマ」'))!
+  expect(pathText.props.dimColor).toBe(true)
+  const up = (n: Drawn, hit: (c: Drawn) => boolean): Exclude<Drawn, string> | undefined => {
+    if (typeof n === 'string') return undefined
+    if ((n.children ?? []).some(hit)) return n
+    for (const c of n.children ?? []) {
+      const found = up(c, hit)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  const line = up(tree, c => typeof c !== 'string' && c.type === 'Text' && textOf(c).includes('「設定」→「外観」→「テーマ」'))
+  expect(line?.props?.borderStyle).toBe(undefined)
+  // 部屋の絵の並びと同じ列（絵の下）にいる
+  const column = up(tree, c => c === line)
+  expect(column?.props?.flexDirection).toBe('column')
+  expect(JSON.stringify(column).includes('rj-tile-color-紺')).toBe(true)
+  await ui.unmount()
+})
+
+test('カード（mobile）：下のボタンの行（保存して閉じる…）も、狭い画面で折り返す', async ($, on) => {
+  world(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('mobile'))
+  for (const tab of [TAB_ROOM, TAB_CLAWD]) {
+    await ui.press({ key: tab })
+    const tree = (await ui.drawn()) as Drawn
+    expect(parentOf(tree, 'rj-save')?.props?.flexWrap).toBe('wrap')
+  }
+  await ui.unmount()
+})
+
+// ---- 失敗したとき、試している見た目を勝手に戻さない ----
+// 偽物のストアの、その操作だけを失敗させる（world の store.set / store.delete は、この Map を呼ぶ）。
+// テストの道具の中では組み込みの Map.prototype を書きかえられないので、この Map 自身に同じ名前の関数を置く。
+const breakStore = (w: World, op: 'set' | 'delete') => {
+  Object.defineProperty(w.store, op, {
+    value: () => {
+      throw new Error('disk full')
+    },
+  })
+}
+
+for (const [name, op, key, toast] of [
+  ['「保存して閉じる」', 'set', 'rj-save', '保存できませんでした'],
+  ['「保存先の設定を消す」', 'delete', 'rj-clear', '消せませんでした'],
+] as const) {
+  test(`カード：${name}に失敗したら、カードは開いたまま。試している見た目は、次のメッセージでも勝手に戻さない`, async ($, on) => {
+    const w = world(on)
+    await $.session.start(start)
+    await $.command.run(rj(''))
+    const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+    await ui.press({ key: 'rj-color-緑' })
+    expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
+    breakStore(w, op)
+    await ui.press({ key })
+    expect(w.toasts.some(t => t.includes(toast))).toBe(true)
+    // カードは開いたままで、まだ保存していないと言っている
+    expect((await ui.find({ type: 'Text', text: /保存してある設定：/ }))?.text).toContain('まだ保存していません')
+    const before = w.sets.length
+    await $.prompt.submit(say('つぎ'))
+    expect(w.sets.length).toBe(before)
+    expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
+    await ui.unmount()
+  })
+}
+
+test('/rj を打って保存に失敗したら、カードで試している見た目は、次のメッセージでも勝手に戻さない', async ($, on) => {
+  const w = world(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount({ plugin: 'rainy-window-jp', surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  await ui.press({ key: 'rj-color-緑' })
+  breakStore(w, 'set')
+  const answer = await $.command.run(rj('桜'))
+  expect(answer.text).toContain('設定は変えていません')
+  const before = w.sets.length
+  await $.prompt.submit(say('つぎ'))
+  expect(w.sets.length).toBe(before)
+  expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
+  await ui.unmount()
+})
+
+// ---- 会話の id が変わったあとの「この会話だけ」 ----
+for (const reason of ['clear', 'resume'] as const) {
+  test(`session.end（${reason}）：デスクトップの会話の id が無いとき、「この会話だけ」は新しい会話の id で読み書きする（前の会話のキーを使い続けない）`, async ($, on) => {
+    const w = world(on, {}, { hostId: null })
+    let id = 'A'
+    on('session.id', () => ({ value: id }))
+    on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+    await $.session.start(start)
+    await $.command.run(rj('緑 s'))
+    expect([...w.store.keys()]).toEqual(['session:A'])
+    expect(labelOf(w.sets.at(-1))).toBe('Rainy window JP 緑')
+    // 同じ窓のまま、別の会話（別の id）として続く。session.start は来ない
+    await $.session.end({ reason, sessionId: 'A', resume: { id: 'A' } } as never)
+    id = 'B'
+    // 新しい会話には「この会話だけ」の設定が無いので、標準（紺）に戻る
+    await $.prompt.submit(say('つぎ'))
+    expect(labelOf(w.sets.at(-1))).toBe('Rainy window')
+    // 新しい会話で保存すると、新しい会話のキーに入る。前の会話の設定は、そのまま残る
+    await $.command.run(rj('桜 s'))
+    expect((w.store.get('session:B') as { theme?: string } | undefined)?.theme).toBe('桜')
+    expect((w.store.get('session:A') as { theme?: string } | undefined)?.theme).toBe('緑')
+  })
+}
+
+// ---- カード全体の大きさ ----
+// 2026-11-15：部屋の絵（1枚 92,000 字）5枚と選ぶ欄を入れたカードが、本物のアプリで出なかった（背景だけ変わった）。
+// 前の版のカードは、絵の合計 約 77,000 字で描けていた。どの背景色・時間帯・姿・演出・ドットでも、カード全体をそれより小さくする。
+test('カード全体（部品の木を文字にしたもの）は、どのタブ・どの組み合わせでも 77,000 字より小さい', async ($, on) => {
+  world(on)
+  mock.clock(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('desktop'))
+  let worst = 0
+  let at = ''
+  const measure = async (name: string) => {
+    const size = JSON.stringify(await ui.drawn()).length
+    if (size > worst) [worst, at] = [size, name]
+  }
+  for (const time of ['朝', '昼', '夕方', '夜']) {
+    await ui.press({ key: TAB_ROOM })
+    await ui.press({ key: `rj-time-${time}` })
+    for (const color of ['紺', '緑', '桜', '橙', '灰']) {
+      await ui.press({ key: `rj-color-${color}` })
+      await measure(`背景 ${color}・${time}`)
+    }
+  }
+  await ui.press({ key: TAB_CLAWD })
+  for (const look of ['sonnet', 'haiku', 'opus', 'fable'])
+    for (const effect of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      await ui.press({ key: `rj-look-${look}` })
+      await ui.press({ key: `rj-effect-${effect}` })
+      for (const dots of ['normal', 'fine']) {
+        await pressUntil(ui, 'rj-dots', dots)
+        await measure(`クロードくん ${look}・${effect}・${dots}`)
+      }
+    }
+  expect(`${at}：${worst}`).toBe(worst < 77_000 ? `${at}：${worst}` : `${at}：77,000 字以上`)
+  await ui.unmount()
 })
