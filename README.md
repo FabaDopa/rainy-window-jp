@@ -37,11 +37,14 @@ Claude デスクトップアプリ（Claude Code 2.1.325 以降）が必要で�
 
 **デスクトップアプリ：** 入力欄の左の **＋** → **Plugins** → **Add marketplace** に `FabaDopa/rainy-window-jp` と入れて追加し、**rainy-window-jp** を **Add plugin** で入れます。
 
-**ターミナル：** プロンプトで次を打ちます（途中で `y`、そのあと保存先を聞かれます）。
+**ターミナル：** 普通のシェル（PowerShell などのターミナル。Claude の会話の中ではありません）で、次の2つを順に打ちます（`claude` コマンドが使える環境で）。
 
 ```
-/plugin install rainy-window-jp --marketplace FabaDopa/rainy-window-jp
+claude plugin marketplace add FabaDopa/rainy-window-jp
+claude plugin install rainy-window-jp@rainy-window-jp
 ```
+
+1つ目で GitHub のこのリポジトリを登録し、2つ目でその中の rainy-window-jp を入れます。保存先は、何も付けなければ自分用（`user`）の設定です（`--scope project` などで変えられます）。
 
 入れたあとに始めた新しいセッションから読み込まれます。外すときは `/plugin` の Installed から削除してください。
 
