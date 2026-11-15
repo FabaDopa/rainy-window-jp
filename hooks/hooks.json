@@ -1,0 +1,4 @@
+{
+  "description": "The rainy-window-jp theme: sets the colors and the backdrop, draws the scene with a Japan-time clock, and adds /rj",
+  "modules": ["./register.tsx"]
+}

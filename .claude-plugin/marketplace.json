@@ -1,0 +1,16 @@
+{
+  "name": "rainy-window-jp",
+  "owner": { "name": "FabaDopa", "url": "https://github.com/FabaDopa" },
+  "metadata": {
+    "description": "rainy-window（作者 Ishu Agrawal）を元にした、Claude デスクトップアプリ（Code タブ）の非公式な背景 mod"
+  },
+  "plugins": [
+    {
+      "name": "rainy-window-jp",
+      "source": "./",
+      "description": "日本時間の時計、5色の背景、時間帯で変わる部屋の色、モデルで姿が変わる右下のクロードくん。元は Ishu Agrawal さんの rainy-window（MIT）",
+      "version": "0.1.0",
+      "category": "theme"
+    }
+  ]
+}
