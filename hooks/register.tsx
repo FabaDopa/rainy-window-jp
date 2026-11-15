@@ -918,7 +918,7 @@ const LOW_NOTE = 'low は、effort が low のときと同じで、演出は出�
 
 /** クロードくんの姿の名前（ボタンと、自動のボタンに添える「いま …」）。 */
 const LOOK_NAME: Record<Look, string> = { sonnet: 'Sonnet', haiku: 'Haiku', opus: 'Opus', fable: 'Fable' }
-const LOOK_BUTTONS: Exclude<RjDraft['look'], 'auto'>[] = ['sonnet', 'haiku', 'opus', 'fable']
+const LOOK_BUTTONS: Exclude<RjDraft['look'], 'auto'>[] = ['haiku', 'sonnet', 'opus', 'fable']
 const EFFECT_BUTTONS: Exclude<RjDraft['effect'], 'auto'>[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const LEVEL_NAME = ['なし', 'medium', 'high', 'xhigh', 'max']
 /**

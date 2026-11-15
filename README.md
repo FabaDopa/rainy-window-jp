@@ -203,7 +203,7 @@ claude --plugin-dir <このフォルダの場所>
 ### 打って指定する
 
 ```
-/rj 姿 <自動|sonnet|haiku|opus|fable>
+/rj 姿 <自動|haiku|sonnet|opus|fable>
 /rj 演出 <自動|low|medium|high|xhigh|max>
 /rj ドット <ふつう|細かい>
 ```

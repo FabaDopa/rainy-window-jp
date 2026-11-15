@@ -1,7 +1,7 @@
 // /rj の引数の読み取り。AI は使わない。語の順番は自由。
 //   /rj                         → カード
 //   /rj <背景色> [時間帯] [明るさ] [p|s]
-//   /rj 姿 <自動|sonnet|haiku|opus|fable> / 演出 <自動|low|medium|high|xhigh|max> / ドット <ふつう|細かい>（背景の語と混ぜてよい）
+//   /rj 姿 <自動|haiku|sonnet|opus|fable> / 演出 <自動|low|medium|high|xhigh|max> / ドット <ふつう|細かい>（背景の語と混ぜてよい）
 //   /rj reset [p|s]             → その保存先の設定を消す（書かなければ すべての会話）
 
 import type { ClawdChoice, ClawdEffect, ClawdLook, Dots } from './clawd-choice'
@@ -61,7 +61,7 @@ export const RJ_USAGE = [
   '  背景色：紺 緑 桜 橙 灰、オフ（navy green pink orange gray off）',
   '  時間帯：自動、または 朝 昼 夕方 夜（固定 夕方 とも書ける。auto morning day evening night）',
   '  明るさ：システム 黒 白（system dark light）',
-  '  姿：自動、または sonnet haiku opus fable（クロードくんの姿。look）',
+  '  姿：自動、または haiku sonnet opus fable（クロードくんの姿。look）',
   '  演出：自動、または low medium high xhigh max（effect。low は演出なし）',
   '  ドット：ふつう 細かい（dots）',
   '  保存先：書かない＝すべての会話、p＝このフォルダ、s＝この会話だけ',
@@ -90,7 +90,7 @@ export function parseRj(args: string): Parsed {
       const next = words[i + 1]
       if (LOOK_KEY.has(w)) {
         if (clawd.look !== undefined) return help('姿は1つだけ書けます。')
-        if (next === undefined || !own(LOOKS, next)) return help('「姿」のあとに 自動・sonnet・haiku・opus・fable のどれかを書いてください。')
+        if (next === undefined || !own(LOOKS, next)) return help('「姿」のあとに 自動・haiku・sonnet・opus・fable のどれかを書いてください。')
         clawd.look = LOOKS[next]!
       } else if (EFFECT_KEY.has(w)) {
         if (clawd.effect !== undefined) return help('演出は1つだけ書けます。')
