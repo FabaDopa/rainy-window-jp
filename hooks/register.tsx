@@ -24,7 +24,7 @@ import { RJ_USAGE, parseRj } from './lib/command'
 import type { Scope } from './lib/command'
 import { buildTheme, roomColors } from './lib/palette'
 import { GLOBAL_KEY, mergeChoice, projectKeyOf, sessionKeyOf, sessionKeysToPrune, storeKeyFor } from './lib/store'
-import { STRIP_H, TABS, TAB_LABEL, TITLE_H, isTab, tabButtonLabel, tabRuleText, tabStripSvg, tabTitleSvg } from './lib/tabs'
+import { STRIP_H, TABS, TAB_LABEL, TIP_H, TIP_TEXT, isTab, tabButtonLabel, tabRuleText, tabStripSvg, tabTipSvg } from './lib/tabs'
 import type { Tab } from './lib/tabs'
 import { bandOf, isSceneStale } from './lib/time'
 import type { Band } from './lib/time'
@@ -40,10 +40,10 @@ const SCENE = 'rainy-window-jp'
 const COMMAND = 'rj'
 const NONE = 'none'
 
-const CLOSED: RjCard = { isOpen: false, inBand: false, draft: null, nowLine: '', previewing: false, tab: 'room', tabFrom: 'room' }
+const CLOSED: RjCard = { isOpen: false, inBand: false, draft: null, nowLine: '', previewing: false, tab: 'room', tabFrom: 'room', tabMoving: false }
 // 検証（plugin validate）が読めるように、plugin と key は文字列のまま書く。
-// 見た目のタブの大きな動く見本をやめて、そのポンの印（pop）を外したので card-4（card-3 までの古い値は、閉じたカードとして読む）。
-const card = atom({ plugin: 'rainy-window-jp', key: 'card' } as const, CLOSED, { shape: 'card-4' })
+// タブの動きの印（tabMoving）を足したので card-5（card-4 までの古い値は、閉じたカードとして読む）。
+const card = atom({ plugin: 'rainy-window-jp', key: 'card' } as const, CLOSED, { shape: 'card-5' })
 
 /** クロードくんの様子の標準。層（Svg）だけを描き直すために、部屋とは別の atom に置く。 */
 const CLAWD_NOW: RjClawd = { phase: 'wait', model: '', effort: '', subagents: 0, arrive: [], leave: [], choice: { ...DEFAULT_CLAWD } }
@@ -60,6 +60,13 @@ let isPreviewing = false
 let keysKept: { root: string; keys: Keys } | undefined
 /** モデルの見張り（1.5秒ごと）の時計。 */
 let stopModelWatch: { cancel: () => void } | undefined
+/** タブの動きの印を消す時計（タブを押してから TAB_MOVE_MS あと。いつも1つだけ）。 */
+let tabMoveTimer: { cancel: () => void } | undefined
+/**
+ * タブを押してから、吹き出しと帯を動く絵にしておく間。過ぎたら止まった絵にする（入力欄の上の帯は、スクロールするたびに
+ * カードの絵を作り直すので、動く絵のままだと、出だしの動きがくり返されてしまう）。ばねは 1 秒より前に止まる（tabs.ts）。
+ */
+const TAB_MOVE_MS = 1000
 /** クロードくんの atom に最後に書いた時刻（$.clock.now）と、2秒あけるために待たせている書き込み（書く回の並び。先頭を次に書く）。 */
 let lastPublishAt = -Infinity
 let pendingPublish: { timer: { cancel: () => void }; slots: Slot[] } | undefined
@@ -800,26 +807,55 @@ async function closeCard($: EngineInterface): Promise<void> {
 /** Opens the card above the prompt, where it stays while the conversation scrolls. */
 async function openCard($: EngineInterface): Promise<void> {
   const resolved = resolveChoice(await readLayers($))
+  stopTabMove()
   await updateCard($, (): RjCard => ({
     isOpen: true,
     inBand: true,
     draft: draftOf(resolved.choice, resolved.source),
     nowLine: nowLineOf(resolved),
     previewing: false,
-    // 開くときは、いつも 🎨 背景 のタブから（帯は動かない）。
+    // 開くときは、いつも 🎨 背景 のタブから（吹き出しと帯は動かない）。
     tab: 'room',
     tabFrom: 'room',
+    tabMoving: false,
   }))
 }
 
+/** タブの動きの時計を止める（止められなくても続ける）。 */
+function stopTabMove(): void {
+  cancelQuietly(tabMoveTimer)
+  tabMoveTimer = undefined
+}
+
+/** タブの動きの印を消す（時計が来た、または同じ窓で会話が続く）。待っている時計があるとき（押し直した）と、印が無いときは書かない。 */
+async function endTabMove($: EngineInterface): Promise<void> {
+  if (tabMoveTimer !== undefined || (await read($, card)).tabMoving !== true) return
+  await updateCard($, was => (tabMoveTimer === undefined ? { ...was, tabMoving: false } : was))
+}
+
 /**
- * タブを押した：今のタブを tabFrom に、新しいタブを tab に置く。帯の SVG は tabFrom → tab で決まるので、
- * 押したときだけ光の帯がすべる。いま開いているタブをもう一度押したときは何もしない（帯を動き直させない）。
+ * タブを押した：今のタブを tabFrom に、新しいタブを tab に置き、動きの印（tabMoving）を付ける。吹き出しと帯の SVG は
+ * tabFrom → tab と印で決まるので、押してから TAB_MOVE_MS（1 秒）のあいだだけ動く絵になり、そのあとは時計が印を消して
+ * 止まった絵になる。1 秒のうちにまた切りかえたら、前の時計は取り消して、そこから数え直す。
+ * いま開いているタブをもう一度押したときは何もしない（動き直させない）。時計が使えなければ、印は付けない（止まった絵）。
  */
 async function pickTab($: EngineInterface, tab: Tab): Promise<void> {
   const now = await read($, card)
   if (!now.isOpen || now.tab === tab) return
-  await updateCard($, was => ({ ...was, tabFrom: isTab(was.tab) ? was.tab : 'room', tab }))
+  stopTabMove()
+  let moving = false
+  try {
+    const timer = $.clock.after(TAB_MOVE_MS, () => {
+      if (tabMoveTimer !== timer) return
+      tabMoveTimer = undefined
+      soon($, 'tab', () => endTabMove($))
+    })
+    tabMoveTimer = timer
+    moving = true
+  } catch {
+    // 時計が使えないときは動かさない（印が残って、描き直しのたびに動き直さないように）。
+  }
+  await updateCard($, was => ({ ...was, tabFrom: isTab(was.tab) ? was.tab : 'room', tab, tabMoving: moving }))
 }
 
 /** カードが開いていたら、打って変えた設定にカードを合わせる（あとで古い選択を保存してしまわないように）。 */
@@ -876,9 +912,9 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
 type Parts = ReturnType<EngineInterface['ui']['resolve']>
 type CardParts = { Box: Parts['Box']; Text: Parts['Text']; Button: Parts['Button'] }
 /**
- * デスクトップ・スマホだけ：カードの Svg（帯・タイトル・見た目のタブの小さな絵）と、帯とタイトルの横幅（CSS px）。ターミナルには無い。
+ * デスクトップ・スマホだけ：カードの Svg（タブの上の吹き出し・タブの下の帯・見た目のタブの小さな絵）と、吹き出しと帯の横幅（CSS px）。ターミナルには無い。
  * どの Svg にも isInteractive は付けず（枠にすると、スクロールする帯の中で、ホイールが取られてスクロールが詰まった）、大きさだけ付けて画像で描く。
- * 帯とタイトルは最後の形で止まって見える（デスクトップでは、すべる動きは出ない）。部屋の1枚には何も付けない。
+ * 部屋の1枚には何も付けない。
  */
 type CardArt = { Svg: ElementConstructor<SvgProps>; width: number }
 /**
@@ -914,7 +950,7 @@ const DOTS_BUTTONS: [RjDraft['dots'], string][] = [
   ['normal', 'ふつう'],
   ['fine', '細かい'],
 ]
-/** 帯とタイトルの横幅（CSS px）。ボタンは左から並ぶので、帯の位置はこの幅によらない（狭い画面だけ小さく）。 */
+/** 吹き出しと帯の絵の横幅（CSS px、カードの横幅の見当）。ボタンは左から並ぶので、帯の位置はこの幅によらない（吹き出しは、この幅の中に収める。狭い画面だけ小さく）。 */
 const ART_WIDTH = { desktop: 600, mobile: 320 } as const
 
 const mark = (isOn: boolean, word: string) => (isOn ? `${word} ✓` : word)
@@ -989,26 +1025,20 @@ function roomRows($: EngineInterface, { Box, Text, Button }: CardParts, now: RjC
 
 /**
  * 🐾 クロードくんの見た目のタブの中身：姿・演出・ドットの行。デスクトップ・スマホでは、姿と演出の行を小さな止まった絵の
- * 一覧にする（1つずつ、絵の下の端に、そのボタンを重ねる。Button は絵を持てず、Box は押せないので、ボタンを絵の上に置く）。
- * 行の上の薄い1行に、「自動」が今なにかを書く。
- * 押すと保存せずに、すぐ部屋のクロードくんが変わる。ボタンだけの行では、自動のボタンに今のモデルの姿と今の effort を添える。
+ * 一覧にする（1つずつ、絵の下にそのボタン。Button は絵を持てず、Box は押せないので、絵はボタンの上に置く）。
+ * 押すと保存せずに、すぐ部屋のクロードくんが変わる。自動のボタンには、今のモデルの姿と今の effort を添える。
  * ターミナル（Svg が無い）と、絵を作れなかったときは、今までどおりボタンだけの行。
  */
 function clawdRows($: EngineInterface, { Box, Text, Button }: CardParts, draft: RjDraft, art: CardArt | undefined, now: ClawdCard | undefined) {
   const pick = pickWith($)
   const autoLook = now === undefined ? '自動' : `自動（いま ${LOOK_NAME[now.autoLook]}）`
   const autoEffect = now?.autoEffort === undefined ? '自動' : `自動（いま ${now.autoEffort}）`
-  const named: [RjDraft['look'], string][] = LOOK_BUTTONS.map(look => [look, LOOK_NAME[look]] as [RjDraft['look'], string])
-  const looks: [RjDraft['look'], string][] = [['auto', autoLook], ...named]
+  const looks: [RjDraft['look'], string][] = [['auto', autoLook], ...LOOK_BUTTONS.map(look => [look, LOOK_NAME[look]] as [RjDraft['look'], string])]
   const effects: [RjDraft['effect'], string][] = [['auto', autoEffect], ...EFFECT_BUTTONS]
-  // 絵の上のボタンの名前は短く（「自動」。いまの姿・effort は、行の上の薄い1行に書く）
-  const looksShort: [RjDraft['look'], string][] = [['auto', '自動'], ...named]
-  const effectsShort: [RjDraft['effect'], string][] = [['auto', '自動'], ...EFFECT_BUTTONS]
-  // lit: 絵の上のボタンだけ、絵の枠（keyed Box）を指すと文字が太くなる（枠の無いボタンに hover は付けられない）
-  const button = <K extends 'look' | 'effect' | 'dots'>(item: K, value: RjDraft[K], name: string, lit = false) => {
+  const button = <K extends 'look' | 'effect' | 'dots'>(item: K, value: RjDraft[K], name: string) => {
     const word = mark(draft[item] === value, name)
     return (
-      <Button key={`rj-${item}-${value}`} label={word} {...(lit ? { hover: { bold: true } } : {})} onPress={pick({ [item]: value } as Partial<RjDraft>)}>
+      <Button key={`rj-${item}-${value}`} label={word} onPress={pick({ [item]: value } as Partial<RjDraft>)}>
         {word}
       </Button>
     )
@@ -1021,50 +1051,43 @@ function clawdRows($: EngineInterface, { Box, Text, Button }: CardParts, draft: 
   )
   const tiles = now?.tiles
   if (art === undefined || tiles === undefined || now === undefined) return [row('姿　　　', 'look', looks), row('演出　　', 'effect', effects), row('ドット　', 'dots', DOTS_BUTTONS)]
-  // 絵の一覧の行：狭い画面では折り返す。絵の説明（alt）は、その絵のボタンと同じ名前。
-  // 1つずつ、位置の基準の Box（hover の範囲でもある）に、絵と、絵の下の端に重ねたボタン（絵の上を指すと文字が太くなる）。
-  // Box の width・height は文字のマス数なので付けず、絵（px）が枠の大きさを決める。
-  const gallery = <K extends 'look' | 'effect'>(head: string, item: K, list: [RjDraft[K], string][], tileOf: (value: RjDraft[K]) => string, alt: (name: string) => string, autoLine: string) => (
-    <Box flexDirection="column">
-      <Text dimColor>{autoLine}</Text>
-      <Box flexDirection="row" gap={1}>
-        <Text>{head}</Text>
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          {list.map(([value, name]) => (
-            <Box key={`rj-tile-${item}-${value}`} position="relative">
-              <art.Svg source={tileOf(value)} alt={alt(name)} width={TILE_W} height={TILE_H} />
-              <Box position="absolute" left={0} right={0} bottom={0} alignItems="center">
-                {button(item, value, name, true)}
-              </Box>
-            </Box>
-          ))}
-        </Box>
+  // 絵の一覧の行：狭い画面では折り返す。絵の説明（alt）は、その絵のボタンと同じ名前
+  const gallery = <K extends 'look' | 'effect'>(head: string, item: K, list: [RjDraft[K], string][], tileOf: (value: RjDraft[K]) => string, alt: (name: string) => string) => (
+    <Box flexDirection="row" gap={1}>
+      <Text>{head}</Text>
+      <Box flexDirection="row" flexWrap="wrap" gap={1}>
+        {list.map(([value, name]) => (
+          <Box key={`rj-tile-${item}-${value}`} flexDirection="column" alignItems="center" gap="xs">
+            <art.Svg source={tileOf(value)} alt={alt(name)} width={TILE_W} height={TILE_H} />
+            {button(item, value, name)}
+          </Box>
+        ))}
       </Box>
     </Box>
   )
-  const lookLine = `自動＝いまのモデル（${LOOK_NAME[now.autoLook]}）`
-  const effectLine = now.autoEffort === undefined ? '自動＝effort が分からないので演出なし' : `自動＝いまの effort（${now.autoEffort}）`
   return [
-    gallery('姿　　　', 'look', looksShort, value => tiles.looks[value], name => `クロードくんの絵：姿 ${name}`, lookLine),
-    gallery('演出　　', 'effect', effectsShort, value => tiles.effects[value], name => `クロードくんの絵：${LOOK_NAME[now.workLook]}・演出 ${name}`, effectLine),
+    gallery('姿　　　', 'look', looks, value => tiles.looks[value], name => `クロードくんの絵：姿 ${name}`),
+    gallery('演出　　', 'effect', effects, value => tiles.effects[value], name => `クロードくんの絵：${LOOK_NAME[now.workLook]}・演出 ${name}`),
     row('ドット　', 'dots', DOTS_BUTTONS),
   ]
 }
 
 /**
- * 入力欄の上のカード：見出し → タブのボタン → 光の帯（ターミナルは線の文字）→ タブの名前の帯 → タブの中身 → 保存先 → ボタン。
+ * 入力欄の上のカード：見出し → タブの吹き出し → タブのボタン → 帯（ターミナルは線の文字）→ タブの中身 → 保存先 → ボタン。
  * 🎨 背景のタブは今までのカードの中身（状態の行・背景色・時間帯・オフにする・明るさの案内）を、今までと同じ場所に描く。
- * 🐾 クロードくんの見た目のタブは、姿・演出の小さな止まった絵の一覧（絵の下の端にボタンを重ねる）と、ドットの行。保存先と「保存して閉じる」「保存先の設定を消す」は両方のタブで共通。
+ * 🐾 クロードくんの見た目のタブは、姿・演出の小さな止まった絵の一覧（絵の下にボタン）と、ドットの行。保存先と「保存して閉じる」「保存先の設定を消す」は両方のタブで共通。
  * 押すと保存せずにすぐ見た目を変える（続けて試せる）。「保存して閉じる」で保存先に背景とクロードくんをまとめて保存し、
  * 「閉じる」で保存してある見た目に戻す。
  * デスクトップのボタンはラベルの文字だけを描き、行は折り返さないので、ラベルは短くし、✓ もラベルに入れる。
- * 選んだタブのボタンは primary で、どの画面でもラベルの終わりに ✓（光の帯の位置の見当も、この ✓ の幅を入れて決める）。
+ * 選んだタブのボタンは primary で、どの画面でもラベルの終わりに ✓（吹き出しのしっぽと帯の位置の見当も、この ✓ の幅を入れて決める）。
  */
 function cardView($: EngineInterface, parts: CardParts, now: RjCard, art: CardArt | undefined, clawdNowCard: ClawdCard | undefined) {
   const { Box, Text, Button } = parts
   const draft = now.draft ?? draftOf(DEFAULT_CHOICE, 'default')
   const tab: Tab = isTab(now.tab) ? now.tab : 'room'
   const from: Tab = isTab(now.tabFrom) ? now.tabFrom : tab
+  // 動く絵は、タブを押してから印が消えるまで（約 1 秒）だけ。ほかのときは止まった絵（行き先のタブの形）
+  const moving = now.tabMoving === true
   const pick = pickWith($)
   const inRoom = tab === 'room'
   const off = mark(draft.theme === 'なし', 'オフにする')
@@ -1076,6 +1099,7 @@ function cardView($: EngineInterface, parts: CardParts, now: RjCard, art: CardAr
           閉じる
         </Button>
       </Box>
+      {art === undefined ? null : <art.Svg source={tabTipSvg(from, tab, art.width, moving)} alt={TIP_TEXT[tab]} width={art.width} height={TIP_H} />}
       <Box flexDirection="row" gap={1}>
         {TABS.map(t => {
           const word = tabButtonLabel(t, t === tab)
@@ -1089,9 +1113,8 @@ function cardView($: EngineInterface, parts: CardParts, now: RjCard, art: CardAr
       {art === undefined ? (
         <Text dimColor>{tabRuleText(tab)}</Text>
       ) : (
-        <art.Svg source={tabStripSvg(from, tab, art.width)} alt={`選んでいるタブ：${TAB_LABEL[tab]}`} width={art.width} height={STRIP_H} />
+        <art.Svg source={tabStripSvg(from, tab, art.width, moving)} alt={`選んでいるタブ：${TAB_LABEL[tab]}`} width={art.width} height={STRIP_H} />
       )}
-      {art === undefined ? null : <art.Svg source={tabTitleSvg(tab, art.width)} alt={TAB_LABEL[tab]} width={art.width} height={TITLE_H} />}
       {inRoom ? roomRows($, parts, now, draft) : clawdRows($, parts, draft, art, clawdNowCard)}
       <Box flexDirection="row" gap={1}>
         <Text>保存先　</Text>
@@ -1186,9 +1209,11 @@ export const register: Register = on => {
       clawdTrouble($, 'start', err)
     }
     // A look left showing by an earlier load is not shown in this one.
+    // タブの動きの印も消す（前の読み込みの時計はもう無いので、残すと描き直しのたびに動き直す）。
     isPreviewing = false
+    stopTabMove()
     await safely($, async () => {
-      await updateCard($, was => ({ ...was, previewing: false }))
+      await updateCard($, was => ({ ...was, previewing: false, tabMoving: false }))
     })
     await safely($, async () => {
       await follow($, true)
@@ -1196,17 +1221,19 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // セッションが終わったら、クロードくんの時計を止める。
+  // セッションが終わったら、クロードくんの時計とタブの動きの時計を止める。
   // /clear と resume は、同じ窓（同じ読み込み）で別の会話として続き、session.start は来ない：クロードくんを待つに
-  // 戻して数え直し（待っている書き込みは捨てずに重ねる）、モデルの見張りは続ける。
+  // 戻して数え直し（待っている書き込みは捨てずに重ねる）、モデルの見張りは続ける。タブの動きの印は、すぐ消す（止まった絵）。
   on('session.end', async ($, e, next) => {
     const goesOn = e.reason === 'clear' || e.reason === 'resume'
     // 時計は止められなくても続ける（next を飛ばさない）。
     cancelQuietly(tickTimer)
     tickTimer = undefined
     machine = undefined
+    stopTabMove()
     if (goesOn) {
       soon($, e.reason, () => resetClawd($, false))
+      soon($, 'tab', () => endTabMove($))
     } else {
       cancelQuietly(pendingPublish?.timer)
       pendingPublish = undefined
@@ -1317,7 +1344,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     const now = await read($, card)
     if (!now.isOpen) return next(e)
-    // Svg（光の帯・タブの名前の帯・見た目のタブの小さな絵）は、デスクトップとスマホだけ。ターミナルは ✓ と線の文字とボタン。
+    // Svg（タブの上の吹き出し・タブの下の帯・見た目のタブの小さな絵）は、デスクトップとスマホだけ。ターミナルは ✓ と線の文字とボタン。
     const art = e.surface === 'desktop' || e.surface === 'mobile' ? { Svg: $.ui.resolve(e).Svg, width: ART_WIDTH[e.surface] } : undefined
     // クロードくんの atom を読むのは見た目のタブのときだけ（背景のタブは、クロードくんが動いても描き直さない）。
     const clawdCard = now.tab === 'clawd' ? await clawdCardNow($, now, art !== undefined) : undefined

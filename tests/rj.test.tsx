@@ -7,7 +7,7 @@ import type { CommandRunInput, On, PromptSubmitInput, ThemeSetArgs } from 'claud
 
 import { TILE_H, TILE_W, clawdTiles, effectTileSvg, lookTileSvg } from '../hooks/clawd/tiles'
 import { roomColors } from '../hooks/lib/palette'
-import { tabRuleText, tabStripSvg, tabTitleSvg } from '../hooks/lib/tabs'
+import { TIP_H, TIP_TEXT, tabRuleText, tabStripSvg, tabTipSvg } from '../hooks/lib/tabs'
 import { bandOf, clockAngles, jstParts } from '../hooks/lib/time'
 
 type World = { sets: ThemeSetArgs[]; clears: number; toasts: string[]; places: number; store: Map<string, unknown>; logs: { text: string; to?: string }[] }
@@ -1261,7 +1261,7 @@ function groupsAt(svg: string, open: string): string[] {
   return out
 }
 
-test('タブ（desktop）：開くと背景のタブ。見た目のタブを押すと帯がすべり、タイトルと小さな見本（今の様子）が出る。ほかのボタンでは帯もタイトルも動き直さない', async ($, on) => {
+test('タブ（desktop）：開くと背景のタブ（上の吹き出しと下の帯は止まった絵）。見た目のタブを押すと、吹き出しと帯がばねで動き、小さな見本（今の様子）が出る。ほかのボタンでは動き直さない', async ($, on) => {
   world(on)
   const cards = cardWrites(on)
   on('session.model', () => ({ value: 'claude-sonnet-4-5' }))
@@ -1271,26 +1271,31 @@ test('タブ（desktop）：開くと背景のタブ。見た目のタブを押�
   const ui = await $.ui.mount(cardOn('desktop'))
   const sources = async () => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
   // 開いたときは背景のタブ：選んだタブのボタンは primary で、ラベルは ✓ で終わる（ほかのボタンと同じ）
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room', tabFrom: 'room' })
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room', tabFrom: 'room', tabMoving: false })
   expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景 ✓')
   expect((await ui.find({ key: TAB_ROOM }))?.props.variant).toBe('primary')
   expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('🐾 クロードくんの見た目')
   expect((await ui.find({ key: TAB_CLAWD }))?.props.variant).toBe(undefined)
-  // 背景のタブ：動かない帯と、タイトルの2つ。背景の行があり、見た目の行は無い
-  expect(await sources()).toEqual([tabStripSvg('room', 'room', 600), tabTitleSvg('room', 600)])
+  // 背景のタブ：タブのボタンの上の吹き出しと、下の帯の2つ。開いたときは動かない（止まった絵）。背景の行があり、見た目の行は無い
+  expect(await sources()).toEqual([tabTipSvg('room', 'room', 600, false), tabStripSvg('room', 'room', 600, false)])
+  expect((await sources()).some(s => s.includes('<animate'))).toBe(false)
+  expect((await ui.findAll({ type: 'Svg' })).map(s => s.props.alt)).toEqual([TIP_TEXT.room, '選んでいるタブ：🎨 背景'])
   expect((await ui.find({ key: 'rj-color-緑' }))?.props.label).toBe('🟩 緑')
   expect(await ui.find({ key: 'rj-look-opus' })).toBe(undefined)
   await ui.press({ key: TAB_CLAWD })
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd', tabFrom: 'room' })
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd', tabFrom: 'room', tabMoving: true })
   expect((await ui.find({ key: TAB_CLAWD }))?.props.variant).toBe('primary')
   expect((await ui.find({ key: TAB_CLAWD }))?.props.label).toBe('🐾 クロードくんの見た目 ✓')
   expect((await ui.find({ key: TAB_ROOM }))?.props.variant).toBe(undefined)
   expect((await ui.find({ key: TAB_ROOM }))?.props.label).toBe('🎨 背景')
-  // 見た目のタブ：帯（背景 → 見た目へすべる）・タイトルと、小さな止まった絵（姿 5つ・演出 6つ）。大きな動く見本は無い
+  // 見た目のタブ：吹き出しと帯（背景 → 見た目へ、ばねで動く）と、小さな止まった絵（姿 5つ・演出 6つ）。大きな動く見本も、タブの名前の帯も無い
   const svgs = await sources()
   expect(svgs.length).toBe(13)
-  expect(svgs[0]).toBe(tabStripSvg('room', 'clawd', 600))
-  expect(svgs[1]).toBe(tabTitleSvg('clawd', 600))
+  expect(svgs[0]).toBe(tabTipSvg('room', 'clawd', 600, true))
+  expect(svgs[1]).toBe(tabStripSvg('room', 'clawd', 600, true))
+  expect(svgs[0]?.includes('<animate')).toBe(true)
+  expect(svgs[1]?.includes('<animate')).toBe(true)
+  expect((await ui.findAll({ type: 'Svg' }))[0]?.props.alt).toBe(TIP_TEXT.clawd)
   // 絵は、今のモデルの姿（自動＝Sonnet）・今の effort（分からない＝なし）・カードで選んでいるドット・今の部屋の色で描く
   const tiles = clawdTiles({ autoLook: 'sonnet', look: 'sonnet', autoLevel: 0, dots: 'normal', room: roomColors('紺', '夜') })
   expect(svgs.slice(2)).toEqual([...Object.values(tiles.looks), ...Object.values(tiles.effects)])
@@ -1304,7 +1309,7 @@ test('タブ（desktop）：開くと背景のタブ。見た目のタブを押�
   expect((await ui.find({ key: 'rj-effect-none' }))?.props.label).toBe('なし')
   expect((await ui.find({ key: 'rj-dots-normal' }))?.props.label).toBe('ふつう ✓')
   expect((await ui.find({ key: 'rj-dots-fine' }))?.props.label).toBe('細かい')
-  // ほかのボタンを押しても、帯とタイトルの source は同じ（動き直さない）。姿の絵もそのまま、演出の絵は押した姿になる
+  // ほかのボタンを押しても、吹き出しと帯の source は同じ（動き直さない）。姿の絵もそのまま、演出の絵は押した姿になる
   await ui.press({ key: 'rj-look-opus' })
   await ui.press({ key: 'rj-scope-project' })
   const after = await sources()
@@ -1317,21 +1322,95 @@ test('タブ（desktop）：開くと背景のタブ。見た目のタブを押�
   await ui.press({ key: TAB_CLAWD })
   expect(cards.length).toBe(count)
   expect((await sources())[0]).toBe(svgs[0])
-  // 背景のタブに戻ると、帯は見た目 → 背景へすべる。選んだものはそのまま
+  // 背景のタブに戻ると、吹き出しと帯は見た目 → 背景へ動く。選んだものはそのまま
   await ui.press({ key: TAB_ROOM })
-  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabFrom: 'clawd' })
-  expect(await sources()).toEqual([tabStripSvg('clawd', 'room', 600), tabTitleSvg('room', 600)])
+  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabFrom: 'clawd', tabMoving: true })
+  expect(await sources()).toEqual([tabTipSvg('clawd', 'room', 600, true), tabStripSvg('clawd', 'room', 600, true)])
   expect((await ui.find({ key: 'rj-scope-project' }))?.props.label).toBe('このフォルダ ✓')
   await ui.press({ key: TAB_CLAWD })
   expect((await ui.find({ key: 'rj-look-opus' }))?.props.label).toBe('Opus ✓')
   await ui.unmount()
-  // 閉じて開き直すと、また背景のタブから
+  // 閉じて開き直すと、また背景のタブから（動かない）
   await $.command.run(rj(''))
   await $.command.run(rj(''))
-  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room', tabFrom: 'room' })
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'room', tabFrom: 'room', tabMoving: false })
 })
 
-test('タブ（mobile）：帯・タイトルは狭い横幅で、小さな絵はデスクトップと同じ大きさで描く', async ($, on) => {
+test('タブの動き：押してから 1 秒だけ動く絵、そのあとは止まった絵（印はカードの atom）。1 秒のうちに切りかえ直すと、そこから動き直す（前の時計は取り消す）', async ($, on) => {
+  world(on)
+  const cards = cardWrites(on)
+  const clock = mock.clock(on)
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('desktop'))
+  const strips = async () => (await ui.findAll({ type: 'Svg' })).slice(0, 2).map(s => String(s.props.source))
+  const moving = (from: 'room' | 'clawd', to: 'room' | 'clawd') => [tabTipSvg(from, to, 600, true), tabStripSvg(from, to, 600, true)]
+  const still = (to: 'room' | 'clawd') => [tabTipSvg(to, to, 600, false), tabStripSvg(to, to, 600, false)]
+  // 開いたときは動かない
+  expect(await strips()).toEqual(still('room'))
+  await ui.press({ key: TAB_CLAWD })
+  expect(await strips()).toEqual(moving('room', 'clawd'))
+  await clock.advance(999)
+  expect(await strips()).toEqual(moving('room', 'clawd'))
+  await clock.advance(1)
+  // 押してから 1 秒：印が消えて、止まった絵（見た目のタブの形）。カードの描き直しで、出だしの動きがくり返されない
+  expect(cards.at(-1)).toMatchObject({ tab: 'clawd', tabFrom: 'room', tabMoving: false })
+  expect(await strips()).toEqual(still('clawd'))
+  expect((await strips()).some(s => s.includes('<animate'))).toBe(false)
+  expect(tabTipSvg('room', 'clawd', 600, false)).toBe(still('clawd')[0])
+  // ほかのボタンを押しても、止まったまま
+  await ui.press({ key: 'rj-look-opus' })
+  expect(await strips()).toEqual(still('clawd'))
+  // 背景へ切りかえて、1 秒のうちに（0.6 秒で）見た目へ切りかえ直す：そこから動き直し、前の時計は取り消す
+  const before = cards.length
+  await ui.press({ key: TAB_ROOM })
+  expect(await strips()).toEqual(moving('clawd', 'room'))
+  await clock.advance(600)
+  await ui.press({ key: TAB_CLAWD })
+  expect(await strips()).toEqual(moving('room', 'clawd'))
+  await clock.advance(600) // 背景を押してから 1.2 秒：その時計は取り消したので、まだ動く絵
+  expect(await strips()).toEqual(moving('room', 'clawd'))
+  await clock.advance(400) // 見た目を押し直してから 1 秒
+  expect(await strips()).toEqual(still('clawd'))
+  // 印を消す書き込みは1回だけ（取り消した時計は書かない）
+  expect(cards.slice(before).map(c => c.tabMoving)).toEqual([true, true, false])
+  await clock.advance(5000)
+  expect(cards.slice(before).map(c => c.tabMoving)).toEqual([true, true, false])
+  await ui.unmount()
+})
+
+test('タブの動き：session.end で時計を止める（/clear・resume では、すぐ止まった絵に戻す）。次の session.start でも印は消える', async ($, on) => {
+  world(on)
+  const cards = cardWrites(on)
+  const clock = mock.clock(on)
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  await $.session.start(start)
+  await $.command.run(rj(''))
+  const ui = await $.ui.mount(cardOn('desktop'))
+  // 会話が終わる：時計は止める（あとで書かない）
+  await ui.press({ key: TAB_CLAWD })
+  expect(cards.at(-1)).toMatchObject({ tabMoving: true })
+  await $.session.end({ reason: 'other', sessionId: 'S1' } as never)
+  const ended = cards.length
+  await clock.advance(2000)
+  expect(cards.length).toBe(ended)
+  // 次の session.start で、印は消える（止まった絵）
+  await $.session.start(start)
+  expect(cards.at(-1)).toMatchObject({ isOpen: true, tab: 'clawd', tabMoving: false })
+  expect((await ui.findAll({ type: 'Svg' })).slice(0, 2).map(s => String(s.props.source))).toEqual([tabTipSvg('clawd', 'clawd', 600, false), tabStripSvg('clawd', 'clawd', 600, false)])
+  // /clear：同じ窓で続くので、時計を止めて、すぐ止まった絵に戻す
+  await ui.press({ key: TAB_ROOM })
+  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabMoving: true })
+  await $.session.end({ reason: 'clear', sessionId: 'S1', resume: { id: 'S1' } } as never)
+  await clock.settle()
+  expect(cards.at(-1)).toMatchObject({ tab: 'room', tabMoving: false })
+  const cleared = cards.length
+  await clock.advance(2000)
+  expect(cards.length).toBe(cleared)
+  await ui.unmount()
+})
+
+test('タブ（mobile）：吹き出し・帯は狭い横幅で、小さな絵はデスクトップと同じ大きさで描く', async ($, on) => {
   world(on)
   mock.clock(on)
   await $.session.start(start)
@@ -1340,9 +1419,9 @@ test('タブ（mobile）：帯・タイトルは狭い横幅で、小さな絵�
   await ui.press({ key: TAB_CLAWD })
   const svgs = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
   expect(svgs.length).toBe(13)
-  expect(svgs[0]).toBe(tabStripSvg('room', 'clawd', 320))
-  expect(svgs[1]).toBe(tabTitleSvg('clawd', 320))
-  expect(svgs.slice(2).every(s => s.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="72"'))).toBe(true)
+  expect(svgs[0]).toBe(tabTipSvg('room', 'clawd', 320, true))
+  expect(svgs[1]).toBe(tabStripSvg('room', 'clawd', 320, true))
+  expect(svgs.slice(2).every(s => s.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"'))).toBe(true)
   await ui.unmount()
 })
 
@@ -1381,7 +1460,7 @@ test('見た目のタブ：姿・演出・ドットを押すと、保存せず�
   expect((await layerNow()).includes('#3A3340')).toBe(false)
   await ui.press({ key: 'rj-look-opus' })
   expect((await ui.find({ key: 'rj-look-opus' }))?.props.label).toBe('Opus ✓')
-  expect((await ui.find({ key: 'rj-look-auto' }))?.props.label).toBe('自動')
+  expect((await ui.find({ key: 'rj-look-auto' }))?.props.label).toBe('自動（いま Sonnet）')
   // 譜面台（Opus の姿）
   expect((await layerNow()).includes('#3A3340')).toBe(true)
   // 演出 max：待っている間でも、カードを開いている間は見せる
@@ -1465,21 +1544,18 @@ test('自動の表示：姿の「自動」には今のモデルの姿、演出�
   const ui = await $.ui.mount(cardOn('desktop'))
   await ui.press({ key: TAB_CLAWD })
   const label = async (key: string) => String((await ui.find({ key }))?.props.label)
-  expect(await label('rj-look-auto')).toBe('自動 ✓')
-  expect(await textLines(ui)).toContain('自動＝いまのモデル（Opus）')
-  expect(await textLines(ui)).toContain('自動＝effort が分からないので演出なし')
+  expect(await label('rj-look-auto')).toBe('自動（いま Opus） ✓')
   expect(await label('rj-effect-auto')).toBe('自動 ✓')
   await $.turn.start(MAIN)
   await readStep($.turn.step(stepOf({ effort: 'max', model: 'claude-opus-5-5' })))
   await clock.advance(2000)
-  expect(await label('rj-effect-auto')).toBe('自動 ✓')
-  expect(await textLines(ui)).toContain('自動＝いまの effort（max）')
-  expect(await textLines(ui)).not.toContain('自動＝effort が分からないので演出なし')
+  expect(await label('rj-effect-auto')).toBe('自動（いま max） ✓')
   // 姿を決めても、自動のボタンには今のモデルの姿が出たまま（✓ は決めた姿へ）
   await ui.press({ key: 'rj-look-fable' })
-  expect(await label('rj-look-auto')).toBe('自動')
-  expect(await textLines(ui)).toContain('自動＝いまのモデル（Opus）')
+  expect(await label('rj-look-auto')).toBe('自動（いま Opus）')
   expect(await label('rj-look-fable')).toBe('Fable ✓')
+  // 「自動＝…」の薄い行は無い（自動が今なにかは、ボタンの名前に書く）
+  expect((await ui.findAll({ type: 'Text' })).some(t => String(t.text).startsWith('自動＝'))).toBe(false)
   await ui.unmount()
 })
 
@@ -1503,11 +1579,7 @@ test('サブエージェントの子に演出は付かない：effort が max �
 
 // ---- 変更 8：見た目のタブは、小さな止まった絵の一覧（大きな動く見本と、そのポンは無くなった） ----
 
-/** 見た目のタブの Svg のうち、小さな絵（帯・タイトルのあと）の source。 */
-async function textLines(ui: { findAll: (q: { type: string }) => Promise<{ text?: string }[]> }): Promise<string[]> {
-  return (await ui.findAll({ type: 'Text' })).map(t => String(t.text))
-}
-
+/** 見た目のタブの Svg のうち、小さな絵（吹き出し・帯のあと）の source。 */
 async function tilesOf(ui: { findAll: (q: { type: string }) => Promise<{ props: Record<string, unknown> }[]> }): Promise<string[]> {
   return (await ui.findAll({ type: 'Svg' })).slice(2).map(s => String(s.props.source))
 }
@@ -1572,27 +1644,21 @@ test('見た目のタブ：絵の下にそのボタン。Opus を押すと演出
   expect(before.slice(5).some(s => s.includes('#3A3340'))).toBe(false)
   // 絵の説明（alt）は、その絵のボタンと同じ名前
   const alts = (await ui.findAll({ type: 'Svg' })).slice(2).map(s => String(s.props.alt))
-  expect(alts.slice(0, 5)).toEqual(['自動', 'Sonnet', 'Haiku', 'Opus', 'Fable'].map(n => `クロードくんの絵：姿 ${n}`))
+  expect(alts.slice(0, 5)).toEqual(['自動（いま Sonnet）', 'Sonnet', 'Haiku', 'Opus', 'Fable'].map(n => `クロードくんの絵：姿 ${n}`))
   expect(alts.slice(5)).toEqual(['自動', 'なし', 'medium', 'high', 'xhigh', 'max'].map(n => `クロードくんの絵：Sonnet・演出 ${n}`))
-  // 1つずつ、keyed Box（relative）に「絵 → 絵の下の端に重ねた Box（absolute）の中にボタン」
-  type Drawn = { type?: string; key?: string; props?: Record<string, unknown>; children?: Drawn[] }
-  const tiles = ((await ui.findAll({ type: 'Box' })) as Drawn[]).filter(b => String(b.props?.key ?? '').startsWith('rj-tile-'))
-  const keys = ['auto', 'sonnet', 'haiku', 'opus', 'fable'].map(v => `look-${v}`).concat(['auto', 'none', 'medium', 'high', 'xhigh', 'max'].map(v => `effect-${v}`))
-  expect(tiles.map(b => b.props?.key)).toEqual(keys.map(k => `rj-tile-${k}`))
-  for (const [i, t] of tiles.entries()) {
-    // Box の width・height は文字のマス数（px ではない）なので付けず、絵（px）が枠の大きさを決める
-    expect(t.props?.position).toBe('relative')
-    const [svg, over] = t.children ?? []
-    expect([svg?.type, svg?.props?.width, svg?.props?.height]).toEqual(['Svg', TILE_W, TILE_H])
-    expect([over?.type, over?.props?.position, over?.props?.left, over?.props?.right, over?.props?.bottom, over?.props?.alignItems]).toEqual(['Box', 'absolute', 0, 0, 0, 'center'])
-    expect(t.children?.length).toBe(2)
-    expect(over?.children?.length).toBe(1)
-    const b = over?.children?.[0]
-    expect([b?.type, String(b?.key ?? b?.props?.key)]).toEqual(['Button', `rj-${keys[i]}`])
-    expect((b as { hover?: unknown } | undefined)?.hover).toEqual({ bold: true })
-  }
+  // 1つずつ、縦の Box に「絵 → その絵のボタン」の順
+  type Drawn = { type?: string; key?: string; props?: Record<string, unknown>; children?: unknown[] }
+  const columns = ((await ui.findAll({ type: 'Box' })) as Drawn[]).filter(b => b.props?.flexDirection === 'column' && b.children?.length === 2)
+  const pairs = columns.map(b => b.children as Drawn[]).map(([a, b]) => [a?.type, `${b?.type}:${b?.key ?? b?.props?.key}`])
+  const keys = ['auto', 'sonnet', 'haiku', 'opus', 'fable'].map(v => `rj-look-${v}`).concat(['auto', 'none', 'medium', 'high', 'xhigh', 'max'].map(v => `rj-effect-${v}`))
+  expect(pairs).toEqual(keys.map(k => ['Svg', `Button:${k}`]))
+  // 絵とボタンは重ねない（位置の基準の Box・重ねる Box は無い）。ボタンに hover も付けない
+  const boxes = (await ui.findAll({ type: 'Box' })) as Drawn[]
+  expect(boxes.some(b => b.props?.position !== undefined)).toBe(false)
+  const buttons = (await ui.findAll({ type: 'Button' })) as { hover?: unknown; props?: Record<string, unknown> }[]
+  expect(buttons.some(b => b.hover !== undefined || b.props?.hover !== undefined)).toBe(false)
   // ボタンは今までのまま（✓ は選んだもの）
-  expect((await ui.find({ key: 'rj-look-auto' }))?.props.label).toBe('自動 ✓')
+  expect((await ui.find({ key: 'rj-look-auto' }))?.props.label).toBe('自動（いま Sonnet） ✓')
   expect((await ui.find({ key: 'rj-effect-auto' }))?.props.label).toBe('自動 ✓')
   await ui.press({ key: 'rj-look-opus' })
   const after = await tilesOf(ui)
@@ -1610,11 +1676,11 @@ test('見た目のタブ：絵の下にそのボタン。Opus を押すと演出
   await ui.unmount()
 })
 
-test('カードの atom は card-4：前の版（card-3、見本のポンの印つき）で書かれた値は、閉じたカードとして読む', async ($, on) => {
+test('カードの atom は card-5：前の版（card-4、タブの動きの印なし）で書かれた値は、閉じたカードとして読む', async ($, on) => {
   world(on)
   mock.clock(on)
-  // 前の版が書いた値（card-3：開いたカード・見た目のタブ・ポンの印）が残っている。カードに1回書かれるまでは、それを読む
-  const OLD = { shape: 'card-3', value: { isOpen: true, inBand: true, draft: null, nowLine: '', previewing: false, tab: 'clawd', tabFrom: 'room', pop: true } }
+  // 前の版が書いた値（card-4：開いたカード・見た目のタブ。動きの印は無い）が残っている。カードに1回書かれるまでは、それを読む
+  const OLD = { shape: 'card-4', value: { isOpen: true, inBand: true, draft: null, nowLine: '', previewing: false, tab: 'clawd', tabFrom: 'room' } }
   let old = true
   on('state.get', async (_, e, next) => {
     const real = (await next(e)) as { value: { value?: unknown; version: number } }
@@ -1639,7 +1705,7 @@ test('カードの atom は card-4：前の版（card-3、見本のポンの印�
 
 // ---- 最後のレビューの直し：カードの Svg が動く、子の数が戻らない ----
 
-test('カードの Svg：帯・タイトル・小さな絵のどれにも isInteractive は付けず（枠にするとスクロールが詰まる）、大きさを持つ。部屋の Svg は何も持たない', async ($, on) => {
+test('カードの Svg：吹き出し・帯・小さな絵のどれにも isInteractive は付けず（枠にするとスクロールが詰まる）、大きさを持つ。部屋の Svg は何も持たない', async ($, on) => {
   world(on)
   mock.clock(on)
   await $.session.start(start)
@@ -1647,12 +1713,13 @@ test('カードの Svg：帯・タイトル・小さな絵のどれにも isInte
   const shape = (s: { props: Record<string, unknown> } | undefined) => [s?.props.isInteractive, s?.props.width, s?.props.height]
   for (const [surface, width] of [['desktop', 600], ['mobile', 320]] as const) {
     const ui = await $.ui.mount(cardOn(surface))
-    // 背景のタブ：帯（横 W・縦 10）とタイトル（横 W・縦 24）
-    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, width, 10], [undefined, width, 24]])
-    // 見た目のタブ：それと、小さな絵 11 枚（姿 5・演出 6。横 96・縦 72、isInteractive なし）
+    // 背景のタブ：吹き出し（横 W・縦 46）と帯（横 W・縦 10）
+    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, width, TIP_H], [undefined, width, 10]])
+    // 見た目のタブ：それと、小さな絵 11 枚（姿 5・演出 6。横 80・縦 60、isInteractive なし）。動いている間も isInteractive は付けない
     await ui.press({ key: TAB_CLAWD })
     const tile = [undefined, TILE_W, TILE_H]
-    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, width, 10], [undefined, width, 24], ...Array.from({ length: 11 }, () => tile)])
+    expect([TILE_W, TILE_H]).toEqual([80, 60])
+    expect((await ui.findAll({ type: 'Svg' })).map(shape)).toEqual([[undefined, width, TIP_H], [undefined, width, 10], ...Array.from({ length: 11 }, () => tile)])
     await ui.press({ key: TAB_ROOM })
     await ui.unmount()
   }

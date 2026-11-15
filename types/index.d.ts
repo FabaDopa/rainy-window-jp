@@ -18,7 +18,7 @@ export type RjDraft = {
   dots: 'normal' | 'fine'
 }
 
-/** 入力欄の上のカード（shape は card-4。card-3 までで書かれた古い値は、初期値＝閉じたカードとして読む）。 */
+/** 入力欄の上のカード（shape は card-5。card-4 までで書かれた古い値は、初期値＝閉じたカードとして読む）。 */
 export type RjCard = {
   /** カードが出ている。 */
   isOpen: boolean
@@ -31,8 +31,10 @@ export type RjCard = {
   previewing: boolean
   /** いま開いているタブ：🎨 背景（room）・🐾 クロードくんの見た目（clawd）。開いたときは room。 */
   tab: 'room' | 'clawd'
-  /** 1つ前のタブ。タブのボタンの下の光の帯は、ここから tab へすべる（同じなら動かない）。 */
+  /** 1つ前のタブ。タブの上の吹き出しと下の帯は、ここから tab へ動く（同じなら動かない）。 */
   tabFrom: 'room' | 'clawd'
+  /** タブを押してから約 1 秒のあいだ true：吹き出しと帯を動く絵にする。時計が消すと、止まった絵になる。 */
+  tabMoving: boolean
 }
 
 /** クロードくんの今の様子。Backdrop の1枚の絵は、これが変わると描き直される（shape は clawd-3）。 */

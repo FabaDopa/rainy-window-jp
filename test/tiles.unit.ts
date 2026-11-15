@@ -138,15 +138,15 @@ test('compactSvg：長方形の path は縦につながるものをまとめる�
 
 // ---- 小さな絵（タイル） ----
 
-test('タイル：横 96・縦 72、クロードくんのまわりを切り出した viewBox、自分の style とマスク', () => {
-  assert.equal(T.TILE_W, 96)
-  assert.equal(T.TILE_H, 72)
+test('タイル：横 80・縦 60、クロードくんのまわりを切り出した viewBox、自分の style とマスク', () => {
+  assert.equal(T.TILE_W, 80)
+  assert.equal(T.TILE_H, 60)
   for (const dots of DOTS) {
     const svg = T.lookTileSvg('fable', dots, ROOM)
-    const head = /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="96" height="72" viewBox="([-\d. ]+)">/.exec(svg)
+    const head = /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="80" height="60" viewBox="([-\d. ]+)">/.exec(svg)
     assert.ok(head !== null, svg.slice(0, 120))
     const [x, y, w, h] = head[1]!.split(' ').map(Number) as [number, number, number, number]
-    assert.ok(Math.abs(w / h - 96 / 72) < 1e-9)
+    assert.ok(Math.abs(w / h - 80 / 60) < 1e-9)
     // 黒板（左上 -10, -12）からマグの取っ手（右 33）まで、足もと（17）まで入る
     assert.ok(x <= -10 && x + w >= 33 && y <= -12 && y + h >= 17, head[1])
     assert.ok(svg.includes('<style>') && svg.includes(dots === 'fine' ? 'id="fm0"' : 'id="c0"'))
