@@ -667,8 +667,8 @@ async function show($: EngineInterface, choice: Choice, force: boolean): Promise
   await sceneNow($, scene, { theme: choice.theme, band })
   const args: ThemeSetArgs =
     built.scheme === undefined
-      ? { colors: built.theme, backdrop: { scene, glass: { blur: 18, opacity: 0.62 } } }
-      : { colors: built.theme, backdrop: { scene, glass: { blur: 18, opacity: 0.62 } }, overrideColorScheme: built.scheme }
+      ? { colors: built.theme, backdrop: { scene, glass: { blur: 0, opacity: 0.5 } } }
+      : { colors: built.theme, backdrop: { scene, glass: { blur: 0, opacity: 0.5 } }, overrideColorScheme: built.scheme }
   const set = await $.theme.set(args)
   shownKey = key
   if (!set.isDrawn) $.ui.log(`rainy-window-jp: the theme is set but not drawn here: ${set.reason}`, { to: 'debug' })

@@ -102,7 +102,7 @@ test('何も保存していなければ、紺（元の rainy-window と同じ色
   await $.session.start(start)
   expect(w.sets.length).toBe(1)
   expect(labelOf(w.sets[0])).toBe('Rainy window')
-  expect(w.sets[0]?.backdrop).toEqual({ scene: 'rainy-window-jp', glass: { blur: 18, opacity: 0.62 } })
+  expect(w.sets[0]?.backdrop).toEqual({ scene: 'rainy-window-jp', glass: { blur: 0, opacity: 0.5 } })
   expect(w.sets[0]?.overrideColorScheme).toBe(undefined)
   expect(w.clears).toBe(0)
 })
