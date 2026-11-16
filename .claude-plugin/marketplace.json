@@ -9,7 +9,7 @@
       "name": "rainy-window-jp",
       "source": "./",
       "description": "日本時間の時計、5色の背景、時間帯で変わる部屋の色、モデルで姿が変わる右下のクロードくん。元は Ishu Agrawal さんの rainy-window（MIT）",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "theme"
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "rainy-window-jp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "rainy-window（作者 Ishu Agrawal）を元にした、日本時間の時計と、5色から選べて時間帯でも変わる部屋の背景色（すべての会話・このフォルダ・この会話だけ のどこかに保存）を持つ背景 mod です。",
   "author": {
     "name": "rainy-window-jp contributors"
